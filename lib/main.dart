@@ -26,6 +26,18 @@ double strokeProgressAt({
   return (drawingTime / (1700 + level * 1050)).clamp(0.0, 1.0);
 }
 
+bool canSkipAt({
+  required int elapsedMs,
+  required int questionStartedMs,
+  required int level,
+}) =>
+    strokeProgressAt(
+      elapsedMs: elapsedMs - 3000,
+      questionStartedMs: questionStartedMs,
+      level: level,
+    ) ==
+    1;
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   LicenseRegistry.addLicense(() async* {
@@ -133,7 +145,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool audioSettingsChanged = false;
 
   int get elapsed => clock.elapsedMilliseconds;
-  int get questionAge => elapsed - questionAt;
+  bool get canSkip =>
+      advanceAfterWrongAt == null &&
+      canSkipAt(
+        elapsedMs: elapsed,
+        questionStartedMs: questionAt,
+        level: level,
+      );
   int get seconds => ((60000 - elapsed).clamp(0, 60000) / 1000).ceil();
   bool get playing => phase == Phase.playing;
 
@@ -359,7 +377,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       finish();
       return;
     }
-    if (questionAge < 2000 || advanceAfterWrongAt != null) return;
+    if (!canSkip) return;
     setState(() {
       missed.add((prompt!.label, drawing));
       nextQuestion(skipped: true);
@@ -396,10 +414,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final insets = MediaQuery.viewPaddingOf(context);
-    final window = MediaQuery.sizeOf(context);
-    final sideInset = window.aspectRatio < 0.60
-        ? max(insets.left, insets.right)
-        : 0.0;
+    // Keep the center of the content at the center of the window, even
+    // when the system status area removes space from only one edge.
+    final sideInset = max(insets.left, insets.right);
     return Scaffold(
       body: SafeArea(
         minimum: EdgeInsets.symmetric(horizontal: sideInset),
@@ -460,7 +477,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   double screenGutter(double width) => width < 320 ? 8 : 16;
 
-  Widget spacedPage(List<Widget> sections) => LayoutBuilder(
+  Widget spacedPage(
+    List<Widget> sections, {
+    MainAxisAlignment distribution = MainAxisAlignment.spaceBetween,
+  }) => LayoutBuilder(
     builder: (context, constraints) => SingleChildScrollView(
       padding: EdgeInsets.symmetric(
         horizontal: screenGutter(constraints.maxWidth),
@@ -471,7 +491,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           minHeight: max(0, constraints.maxHeight - 32),
         ),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          mainAxisAlignment: distribution,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: sections,
         ),
@@ -551,7 +571,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         ],
       ),
     ),
-  ]);
+  ], distribution: MainAxisAlignment.spaceEvenly);
 
   Widget prepare() => spacedPage([
     appTitle(),
@@ -585,7 +605,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         0.0,
         constraints.maxWidth - 2 * screenGutter(constraints.maxWidth),
       );
-      final sideBySide = contentWidth >= 480;
+      final sideBySide = contentWidth >= 420;
       final canvasSize = sideBySide
           ? min(
               (contentWidth - 20) * 0.60,
@@ -663,9 +683,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             ),
           ),
           TextButton(
-            onPressed: questionAge >= 2000 && advanceAfterWrongAt == null
-                ? skip
-                : null,
+            onPressed: canSkip ? skip : null,
             child: const Text('건너뛰기', style: TextStyle(fontSize: 17)),
           ),
         ],

@@ -5,6 +5,24 @@ import 'package:rabbit_sketchbook/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('skipping unlocks three seconds after a drawing completes', () {
+    const start = 48000;
+    const level = 3;
+    final completed = List.generate(5000, (i) => start + i).firstWhere(
+      (elapsed) =>
+          strokeProgressAt(
+            elapsedMs: elapsed,
+            questionStartedMs: start,
+            level: level,
+          ) ==
+          1,
+    );
+    bool canSkip(int elapsed) =>
+        canSkipAt(elapsedMs: elapsed, questionStartedMs: start, level: level);
+    expect(canSkip(completed), isFalse);
+    expect(canSkip(completed + 2999), isFalse);
+    expect(canSkip(completed + 3000), isTrue);
+  });
   test('strokes accelerate smoothly over the round', () {
     double progress(int elapsed, int start) => strokeProgressAt(
       elapsedMs: elapsed,
@@ -67,7 +85,15 @@ void main() {
       expect(tester.getCenter(heading).dx, closeTo(195, 0.1));
       tester.view.physicalSize = const Size(466, 678);
       await tester.pump();
-      expect(tester.getSize(start).width, closeTo(362, 0.1));
+      expect(tester.getSize(start).width, closeTo(290, 0.1));
+      expect(tester.getCenter(start).dx, closeTo(233, 0.1));
+      expect(tester.getCenter(heading).dx, closeTo(233, 0.1));
+      tester.view.padding = const FakeViewPadding(left: 72);
+      tester.view.viewPadding = const FakeViewPadding(left: 72);
+      await tester.pump();
+      expect(tester.getCenter(start).dx, closeTo(233, 0.1));
+      tester.view.padding = const FakeViewPadding(right: 72);
+      tester.view.viewPadding = const FakeViewPadding(right: 72);
       expect(tester.getBottomLeft(start).dy, lessThan(678));
       tester.view.physicalSize = const Size(390, 844);
       await tester.pump();
@@ -90,7 +116,9 @@ void main() {
         (widget) => widget is CustomPaint && widget.painter is StrokePainter,
       );
       expect(tester.getCenter(canvas).dx, closeTo(195, 0.1));
-      tester.view.physicalSize = const Size(669, 951);
+      tester.view.physicalSize = const Size(626, 890);
+      tester.view.padding = const FakeViewPadding(right: 84);
+      tester.view.viewPadding = const FakeViewPadding(right: 84);
       await tester.pump();
       expect(find.byKey(const ValueKey('wide-play-layout')), findsOneWidget);
       expect(
@@ -98,10 +126,13 @@ void main() {
         lessThan(tester.getTopLeft(find.byType(OutlinedButton).first).dx),
       );
       expect(find.text('0점'), findsOneWidget);
-      expect(tester.getBottomLeft(skip).dy, lessThan(951));
+      expect(tester.getBottomLeft(skip).dy, lessThan(890));
       tester.view.physicalSize = const Size(466, 678);
+      tester.view.padding = const FakeViewPadding(right: 72);
+      tester.view.viewPadding = const FakeViewPadding(right: 72);
       await tester.pump();
       expect(find.byKey(const ValueKey('wide-play-layout')), findsNothing);
+      expect(tester.getCenter(canvas).dx, closeTo(233, 0.1));
       expect(
         tester.getBottomLeft(canvas).dy,
         lessThan(tester.getTopLeft(find.byType(OutlinedButton).first).dy),
