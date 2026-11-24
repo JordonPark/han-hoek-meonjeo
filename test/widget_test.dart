@@ -24,6 +24,10 @@ void main() {
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(390, 844));
       addTearDown(() => tester.binding.setSurfaceSize(null));
+      tester.view.devicePixelRatio = 1;
+      tester.view.padding = const FakeViewPadding(right: 72);
+      tester.view.viewPadding = const FakeViewPadding(right: 72);
+      addTearDown(tester.view.reset);
       debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       addTearDown(() => debugDefaultTargetPlatformOverride = null);
       SharedPreferences.setMockInitialValues({});
@@ -45,6 +49,7 @@ void main() {
       final start = find.widgetWithText(FilledButton, '시작');
       expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
       expect(tester.getBottomLeft(start).dy, lessThan(844));
+      expect(tester.getCenter(start).dx, closeTo(195, 0.1));
       await tester.tap(start);
       await tester.pump();
       for (final label in ['3', '2', '1']) {
@@ -60,6 +65,10 @@ void main() {
       expect(find.byType(OutlinedButton), findsNWidgets(4));
       expect(tester.widget<TextButton>(skip).onPressed, isNull);
       expect(tester.getBottomLeft(skip).dy, lessThan(844));
+      final canvas = find.byWidgetPredicate(
+        (widget) => widget is CustomPaint && widget.painter is StrokePainter,
+      );
+      expect(tester.getCenter(canvas).dx, closeTo(195, 0.1));
       await tester.pumpWidget(const SizedBox());
     },
   );

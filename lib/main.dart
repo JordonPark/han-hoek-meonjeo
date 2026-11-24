@@ -339,21 +339,26 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 540),
-          child: switch (phase) {
-            Phase.home => home(),
-            Phase.preparing => prepare(),
-            Phase.playing => game(),
-            Phase.results => results(),
-          },
+  Widget build(BuildContext context) {
+    final insets = MediaQuery.viewPaddingOf(context);
+    final sideInset = max(insets.left, insets.right);
+    return Scaffold(
+      body: SafeArea(
+        minimum: EdgeInsets.symmetric(horizontal: sideInset),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 540),
+            child: switch (phase) {
+              Phase.home => home(),
+              Phase.preparing => prepare(),
+              Phase.playing => game(),
+              Phase.results => results(),
+            },
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 
   Widget title(String label, {double size = 35, Color color = ink}) => Text(
     label,
@@ -373,11 +378,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       onPressed: action,
       child: Text(label),
     ),
-  );
-
-  Widget page(List<Widget> children) => ListView(
-    padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
-    children: children,
   );
 
   Widget spacedPage(List<Widget> sections, {double horizontal = 24}) =>
@@ -550,45 +550,60 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget results() => page([
-    title('시간 종료', size: 27),
-    title('$score개 정답', size: 49, color: blue),
-    title('최고 기록 $best개', size: 17),
-    const SizedBox(height: 18),
-    if (missed.isNotEmpty) ...[
-      title('놓친 그림', size: 20),
-      const SizedBox(height: 8),
-      SizedBox(
-        height: 165,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          itemCount: missed.length,
-          separatorBuilder: (_, _) => const SizedBox(width: 8),
-          itemBuilder: (context, index) {
-            final (label, strokes) = missed[index];
-            return SizedBox(
-              width: 130,
-              child: Column(
-                children: [
-                  SizedBox.square(
-                    dimension: 125,
-                    child: sketch(strokes, 1, false),
-                  ),
-                  title(label, size: 15),
-                ],
+  Widget results() => spacedPage([
+    Column(
+      children: [
+        title('시간 종료', size: 27),
+        title('$score개 정답', size: 49, color: blue),
+        title('최고 기록 $best개', size: 17),
+      ],
+    ),
+    if (missed.isNotEmpty)
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        child: Column(
+          children: [
+            title('놓친 그림', size: 20),
+            const SizedBox(height: 8),
+            Center(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  spacing: 12,
+                  children: [
+                    for (final (label, strokes) in missed)
+                      SizedBox(
+                        width: missed.length == 1 ? 176 : 136,
+                        child: Column(
+                          children: [
+                            AspectRatio(
+                              aspectRatio: 1,
+                              child: sketch(strokes, 1, false),
+                            ),
+                            const SizedBox(height: 6),
+                            title(label, size: 15),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            );
-          },
+            ),
+          ],
         ),
       ),
-    ],
-    primary('한 판 더', start),
-    TextButton(
-      onPressed: () => setState(() => phase = Phase.home),
-      child: const Text('홈으로'),
+    Column(
+      children: [
+        primary('한 판 더', start),
+        TextButton(
+          onPressed: () => setState(() => phase = Phase.home),
+          child: const Text('홈으로'),
+        ),
+        const SizedBox(height: 12),
+        const AdBanner(),
+      ],
     ),
-    const SizedBox(height: 12),
-    const AdBanner(),
   ]);
 
   Widget sketch(List<List<Offset>> strokes, double progress, bool pencil) =>
@@ -728,15 +743,22 @@ class _AdBannerState extends State<AdBanner> {
   @override
   Widget build(BuildContext context) {
     final ad = banner;
-    if (!loaded || ad == null || MediaQuery.sizeOf(context).width < 368) {
+    if (!loaded || ad == null) {
       return const SizedBox.shrink();
     }
-    return Center(
-      child: SizedBox(
-        width: ad.size.width.toDouble(),
-        height: ad.size.height.toDouble(),
-        child: AdWidget(ad: ad),
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < ad.size.width) {
+          return const SizedBox.shrink();
+        }
+        return Center(
+          child: SizedBox(
+            width: ad.size.width.toDouble(),
+            height: ad.size.height.toDouble(),
+            child: AdWidget(ad: ad),
+          ),
+        );
+      },
     );
   }
 }
