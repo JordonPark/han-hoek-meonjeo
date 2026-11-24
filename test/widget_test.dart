@@ -50,6 +50,10 @@ void main() {
       expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
       expect(tester.getBottomLeft(start).dy, lessThan(844));
       expect(tester.getCenter(start).dx, closeTo(195, 0.1));
+      expect(tester.getSize(start).width, closeTo(230, 0.1));
+      final heading = find.text('토끼의 낙서장');
+      expect(tester.widget<Text>(heading).maxLines, 1);
+      expect(tester.getCenter(heading).dx, closeTo(195, 0.1));
       await tester.tap(start);
       await tester.pump();
       for (final label in ['3', '2', '1']) {

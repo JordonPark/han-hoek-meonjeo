@@ -377,15 +377,23 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     double size = 36,
     Color color = ink,
     bool handwritten = false,
+    bool singleLine = false,
   }) => Text(
     label,
     textAlign: TextAlign.center,
+    maxLines: singleLine ? 1 : null,
+    softWrap: !singleLine,
     style: TextStyle(
       fontFamily: handwritten ? 'Gaegu' : null,
       fontSize: size,
       fontWeight: handwritten ? FontWeight.w700 : FontWeight.w800,
       color: color,
     ),
+  );
+
+  Widget appTitle() => FittedBox(
+    fit: BoxFit.scaleDown,
+    child: title('토끼의 낙서장', size: 44, handwritten: true, singleLine: true),
   );
 
   Widget primary(String label, VoidCallback? action) => SizedBox(
@@ -402,27 +410,31 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     ),
   );
 
-  Widget spacedPage(List<Widget> sections, {double horizontal = 24}) =>
-      LayoutBuilder(
-        builder: (context, constraints) => SingleChildScrollView(
-          padding: EdgeInsets.symmetric(horizontal: horizontal, vertical: 16),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              minHeight: max(0, constraints.maxHeight - 32),
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: sections,
-            ),
-          ),
+  double screenGutter(double width) => width < 320 ? 8 : 16;
+
+  Widget spacedPage(List<Widget> sections) => LayoutBuilder(
+    builder: (context, constraints) => SingleChildScrollView(
+      padding: EdgeInsets.symmetric(
+        horizontal: screenGutter(constraints.maxWidth),
+        vertical: 16,
+      ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          minHeight: max(0, constraints.maxHeight - 32),
         ),
-      );
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: sections,
+        ),
+      ),
+    ),
+  );
 
   Widget home() => spacedPage([
     Column(
       children: [
-        title('토끼의 낙서장', size: 44, handwritten: true),
+        appTitle(),
         const SizedBox(height: 10),
         title('60초 동안 그림을 맞혀요', size: 21),
       ],
@@ -431,7 +443,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       padding: const EdgeInsets.symmetric(vertical: 20),
       child: Image.asset(
         'assets/home-rabbit.png',
-        height: (MediaQuery.sizeOf(context).height * 0.30)
+        height: (MediaQuery.sizeOf(context).height * 0.32)
             .clamp(170, 300)
             .toDouble(),
         fit: BoxFit.contain,
@@ -474,7 +486,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   ]);
 
   Widget prepare() => spacedPage([
-    title('토끼의 낙서장', size: 44, handwritten: true),
+    appTitle(),
     Image.asset(
       'assets/open-rabbit.png',
       height: (MediaQuery.sizeOf(context).height * 0.35)
@@ -502,7 +514,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   Widget game() => LayoutBuilder(
     builder: (context, constraints) {
       final canvasSize = min(
-        max(0.0, constraints.maxWidth - 40),
+        max(0.0, constraints.maxWidth - 2 * screenGutter(constraints.maxWidth)),
         max(130.0, constraints.maxHeight - 335),
       );
       final progress = strokeProgressAt(
@@ -577,7 +589,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             ),
           ],
         ),
-      ], horizontal: 20);
+      ]);
     },
   );
 
