@@ -477,39 +477,43 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     ],
   );
 
-  Widget primary(String label, VoidCallback? action) => SizedBox(
-    width: double.infinity,
-    child: DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(19),
-        color: action == null ? null : blue,
-        image: action == null
-            ? null
-            : const DecorationImage(
-                image: paperTexture,
-                fit: BoxFit.cover,
-                colorFilter: ColorFilter.mode(blue, BlendMode.multiply),
-              ),
-      ),
-      child: FilledButton(
-        style: FilledButton.styleFrom(
-          backgroundColor: Colors.transparent,
-          foregroundColor: Colors.white,
-          minimumSize: const Size(0, 55),
-          shape: RoundedRectangleBorder(
+  Widget primary(String label, VoidCallback? action, {double fontSize = 34}) =>
+      SizedBox(
+        width: double.infinity,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(19),
+            color: action == null ? null : blue,
+            image: action == null
+                ? null
+                : const DecorationImage(
+                    image: paperTexture,
+                    fit: BoxFit.cover,
+                    colorFilter: ColorFilter.mode(blue, BlendMode.multiply),
+                  ),
           ),
-          textStyle: const TextStyle(
-            fontFamily: 'Gaegu',
-            fontSize: 34,
-            fontWeight: FontWeight.w700,
+          child: FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.transparent,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(0, 55),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(19),
+              ),
+              textStyle: TextStyle(
+                fontFamily: 'Gaegu',
+                fontSize: fontSize,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            onPressed: action,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(label, maxLines: 1, softWrap: false),
+            ),
           ),
         ),
-        onPressed: action,
-        child: Text(label),
-      ),
-    ),
-  );
+      );
 
   double screenGutter(double width) => width < 320 ? 8 : 16;
 
@@ -835,7 +839,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       children: [
         Row(
           children: [
-            Expanded(child: primary('한 판 더', start)),
+            Expanded(child: primary('한 판 더', start, fontSize: 27)),
             const SizedBox(width: 10),
             Expanded(
               child: OutlinedButton(
@@ -854,7 +858,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   ),
                 ),
                 onPressed: () => setState(() => phase = Phase.home),
-                child: const Text('홈으로'),
+                child: const FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text('홈으로', maxLines: 1, softWrap: false),
+                ),
               ),
             ),
           ],

@@ -175,6 +175,15 @@ void main() {
             .every((button) => button.onPressed == null),
         isTrue,
       );
+      game.finish();
+      tester.view.physicalSize = const Size(390, 844);
+      await tester.pump();
+      final replay = find.widgetWithText(FilledButton, '한 판 더');
+      final home = find.widgetWithText(OutlinedButton, '홈으로');
+      expect(tester.widget<Text>(find.text('한 판 더')).maxLines, 1);
+      expect(tester.widget<Text>(find.text('홈으로')).maxLines, 1);
+      expect(tester.getSize(replay).height, tester.getSize(home).height);
+      expect(tester.getCenter(replay).dy, tester.getCenter(home).dy);
       await tester.pumpWidget(const SizedBox());
     },
   );
