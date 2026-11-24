@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'game_audio.dart';
+
 const blue = Color(0xff2544c4);
 const paper = Color(0xfffff6e3);
 const ink = Color(0xff31271c);
@@ -108,6 +110,7 @@ class GameScreen extends StatefulWidget {
 class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   final random = Random();
   final clock = Stopwatch();
+  final audio = GameAudio();
 
   final missed = <(String, List<List<Offset>>)>[];
   final disabled = <String>{};
@@ -127,6 +130,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int? advanceAfterWrongAt;
   int countdown = 3;
   bool loading = true;
+  bool audioSettingsChanged = false;
 
   int get elapsed => clock.elapsedMilliseconds;
   int get questionAge => elapsed - questionAt;
@@ -138,7 +142,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(loadPack());
-    unawaited(loadBest());
+    unawaited(loadPreferences());
   }
 
   Future<void> loadPack() async {
@@ -174,13 +178,42 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> loadBest() async {
+  Future<void> loadPreferences() async {
     try {
-      final stored =
-          (await SharedPreferences.getInstance()).getInt('best_score') ?? 0;
-      if (mounted && stored > best) setState(() => best = stored);
+      final preferences = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      setState(() {
+        best = max(best, preferences.getInt('best_score') ?? 0);
+        if (!audioSettingsChanged) {
+          audio.saveSettings(
+            music: preferences.getBool('game_music') ?? true,
+            effects: preferences.getBool('game_effects') ?? true,
+          );
+        }
+      });
     } on Exception catch (_) {
       // Keep the current session playable if platform storage fails.
+    }
+  }
+
+  Future<void> setAudioSettings({
+    required bool music,
+    required bool effects,
+  }) async {
+    setState(() {
+      audioSettingsChanged = true;
+      audio.saveSettings(music: music, effects: effects);
+    });
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      final latestMusic = audio.musicEnabled;
+      final latestEffects = audio.effectsEnabled;
+      await Future.wait([
+        preferences.setBool('game_music', latestMusic),
+        preferences.setBool('game_effects', latestEffects),
+      ]);
+    } on Exception catch (_) {
+      // The in-memory controls still work if storage is unavailable.
     }
   }
 
@@ -205,16 +238,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       nextQuestion(skipped: false);
     });
     while (countdown > 0) {
+      audio.play(GameSound.countdown);
       await Future<void>.delayed(const Duration(seconds: 1));
       if (!mounted || phase != Phase.preparing) return;
       setState(() => countdown--);
     }
+    audio.play(GameSound.start);
     await Future<void>.delayed(const Duration(milliseconds: 450));
     if (!mounted || phase != Phase.preparing) return;
     setState(() {
       phase = Phase.playing;
       clock.start();
     });
+    audio.setRoundPlaying(true);
     refresh?.cancel();
     refresh = Timer.periodic(const Duration(milliseconds: 33), (_) => tick());
   }
@@ -236,7 +272,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) tick();
+    final resumed = state == AppLifecycleState.resumed;
+    if (resumed) tick();
+    audio.setActive(resumed);
   }
 
   void nextQuestion({required bool skipped}) {
@@ -300,10 +338,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (elapsed < lockedUntil || disabled.contains(option)) return;
     setState(() {
       if (option == prompt!.label) {
+        audio.play(GameSound.correct);
         score++;
         nextQuestion(skipped: false);
       } else {
         unawaited(HapticFeedback.mediumImpact());
+        audio.play(GameSound.wrong);
         disabled.add(option);
         lockedUntil = elapsed + 1500;
         if (disabled.length == 3) {
@@ -333,6 +373,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
     refresh?.cancel();
     clock.stop();
+    audio.setRoundPlaying(false);
+    audio.play(GameSound.finish);
     setState(() {
       phase = Phase.results;
       if (score > best) {
@@ -347,6 +389,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     refresh?.cancel();
     clock.stop();
+    audio.dispose();
     super.dispose();
   }
 
@@ -471,6 +514,26 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       child: Column(
         children: [
           const AdBanner(),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 8,
+            children: [
+              FilterChip(
+                label: const Text('음악'),
+                selected: audio.musicEnabled,
+                onSelected: (music) => unawaited(
+                  setAudioSettings(music: music, effects: audio.effectsEnabled),
+                ),
+              ),
+              FilterChip(
+                label: const Text('효과음'),
+                selected: audio.effectsEnabled,
+                onSelected: (effects) => unawaited(
+                  setAudioSettings(music: audio.musicEnabled, effects: effects),
+                ),
+              ),
+            ],
+          ),
           TextButton(
             onPressed: () => showAboutDialog(
               context: context,

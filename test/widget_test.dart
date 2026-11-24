@@ -47,6 +47,18 @@ void main() {
       });
       final start = find.widgetWithText(FilledButton, '시작');
       expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
+      final music = find.widgetWithText(FilterChip, '음악');
+      final effects = find.widgetWithText(FilterChip, '효과음');
+      await tester.ensureVisible(music);
+      await tester.tap(music);
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilterChip>(music).selected, isFalse);
+      expect(tester.widget<FilterChip>(effects).selected, isTrue);
+      expect(
+        (await SharedPreferences.getInstance()).getBool('game_music'),
+        isFalse,
+      );
+      await tester.ensureVisible(start);
       expect(tester.getBottomLeft(start).dy, lessThan(844));
       expect(tester.getCenter(start).dx, closeTo(195, 0.1));
       expect(tester.getSize(start).width, closeTo(230, 0.1));
