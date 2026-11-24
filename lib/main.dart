@@ -545,13 +545,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     ),
     Padding(
       padding: const EdgeInsets.symmetric(vertical: 20),
-      child: Image.asset(
-        'assets/paper-rabbit.webp',
-        height: (MediaQuery.sizeOf(context).height * 0.37)
-            .clamp(170, 330)
-            .toDouble(),
-        fit: BoxFit.contain,
-        excludeFromSemantics: true,
+      child: RabbitIdle(
+        child: Image.asset(
+          'assets/paper-rabbit.webp',
+          height: (MediaQuery.sizeOf(context).height * 0.37)
+              .clamp(170, 330)
+              .toDouble(),
+          fit: BoxFit.contain,
+          excludeFromSemantics: true,
+        ),
       ),
     ),
     Column(
@@ -971,6 +973,61 @@ class SketchbookBinding extends CustomPainter {
 
   @override
   bool shouldRepaint(SketchbookBinding oldDelegate) => false;
+}
+
+class RabbitIdle extends StatefulWidget {
+  const RabbitIdle({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<RabbitIdle> createState() => _RabbitIdleState();
+}
+
+class _RabbitIdleState extends State<RabbitIdle>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 3400),
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context) ||
+        !TickerMode.valuesOf(context).enabled) {
+      controller.reset();
+    } else if (!controller.isAnimating) {
+      controller.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    child: RepaintBoundary(child: widget.child),
+    builder: (context, child) {
+      final phase = controller.value * 2 * pi;
+      final breath = (1 - cos(phase)) / 2;
+      return Transform.translate(
+        offset: Offset(0, -5 * breath),
+        child: Transform.rotate(
+          angle: sin(phase) * 0.014,
+          child: Transform.scale(
+            scale: 1 + breath * 0.018,
+            alignment: Alignment.bottomCenter,
+            child: child,
+          ),
+        ),
+      );
+    },
+  );
 }
 
 class StrokePainter extends CustomPainter {

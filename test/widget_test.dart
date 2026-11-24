@@ -5,6 +5,29 @@ import 'package:rabbit_sketchbook/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  testWidgets('the rabbit moves only when animations are enabled', (
+    tester,
+  ) async {
+    const artwork = ValueKey('rabbit-art');
+    Future<void> show({required bool reducedMotion}) => tester.pumpWidget(
+      MediaQuery(
+        data: MediaQueryData(disableAnimations: reducedMotion),
+        child: const Center(
+          child: RabbitIdle(
+            child: SizedBox(key: artwork, width: 100, height: 100),
+          ),
+        ),
+      ),
+    );
+    await show(reducedMotion: false);
+    final resting = tester.getCenter(find.byKey(artwork));
+    await tester.pump(const Duration(milliseconds: 1700));
+    expect(tester.getCenter(find.byKey(artwork)).dy, lessThan(resting.dy));
+    await show(reducedMotion: true);
+    await tester.pump(const Duration(milliseconds: 1700));
+    expect(tester.getCenter(find.byKey(artwork)), resting);
+  });
+
   test('skipping unlocks three seconds after a drawing completes', () {
     const start = 48000;
     const level = 3;
@@ -69,7 +92,7 @@ void main() {
       final effects = find.widgetWithText(FilterChip, '효과음');
       await tester.ensureVisible(music);
       await tester.tap(music);
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 300));
       expect(tester.widget<FilterChip>(music).selected, isFalse);
       expect(tester.widget<FilterChip>(effects).selected, isTrue);
       expect(
