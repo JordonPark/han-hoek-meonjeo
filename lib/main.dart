@@ -114,7 +114,7 @@ const related = <String, List<String>>{
   '칫솔': ['빗자루', '붓', '포크'],
 };
 
-enum Phase { home, preparing, playing, results }
+enum Phase { download, home, preparing, playing, results }
 
 class GameScreen extends StatefulWidget {
   const GameScreen({super.key});
@@ -135,7 +135,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   List<String> options = [];
   List<List<Offset>> drawing = [];
   Prompt? prompt;
-  Phase phase = Phase.home;
+  Phase phase = SketchFlow.available ? Phase.download : Phase.home;
   Timer? refresh;
   String? error;
   int score = 0;
@@ -149,12 +149,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool audioSettingsChanged = false;
   SketchFlow? sketchFlow;
   bool openingSketchFlow = false;
-  bool modelDownloaded = false;
+  SketchFlowTransfer? modelTransfer;
   bool preparingDrawing = false;
   bool aiRound = false;
   bool aiDrawing = false;
   String? modelStatus;
-  double? modelProgress;
+  int? modelPercent;
   final generated = <String, List<List<Offset>>>{};
   int round = 0;
 
@@ -179,50 +179,68 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Future<void> checkModel() async {
+    var openingCachedModel = false;
     try {
-      final downloaded = await SketchFlow.isDownloaded();
-      if (mounted) setState(() => modelDownloaded = downloaded);
-    } catch (_) {
-      // The bundled game remains playable if the cache is unavailable.
-    }
-  }
-
-  Future<void> enableModel() async {
-    setState(() {
-      openingSketchFlow = true;
-      modelStatus = 'SketchFlow 준비 중';
-      modelProgress = null;
-    });
-    try {
-      final model = await SketchFlow.open(
-        onDownload: (file, progress) {
-          if (!mounted) return;
-          final percent = progress == null ? null : (progress * 100).floor();
-          final label = file.endsWith('.onnx') ? 'SketchFlow 모델' : '제시어 데이터';
-          final status = percent == null
-              ? '$label 다운로드 중'
-              : '$label 다운로드 $percent%';
-          if (status != modelStatus) {
-            setState(() {
-              modelStatus = status;
-              modelProgress = progress;
-            });
-          }
-        },
-      );
+      if (!await SketchFlow.isDownloaded() ||
+          !mounted ||
+          phase != Phase.download ||
+          openingSketchFlow) {
+        return;
+      }
+      openingCachedModel = true;
+      setState(() => openingSketchFlow = true);
+      final model = await SketchFlow.open();
       if (!mounted) {
         await model.dispose();
         return;
       }
       setState(() {
         sketchFlow = model;
-        modelDownloaded = true;
-        modelStatus = null;
+        phase = Phase.home;
       });
     } catch (_) {
-      if (mounted) setState(() => modelStatus = '모델을 준비하지 못했어요. 다시 시도해 주세요.');
+      if (mounted) setState(() => modelStatus = '스케치북을 열지 못했어요. 다시 시도해 주세요.');
     } finally {
-      if (mounted) setState(() => openingSketchFlow = false);
+      if (mounted && openingCachedModel) {
+        setState(() => openingSketchFlow = false);
+      }
+    }
+  }
+
+  Future<void> enableModel() async {
+    if (openingSketchFlow) return;
+    final transfer = SketchFlowTransfer();
+    setState(() {
+      modelTransfer = transfer;
+      openingSketchFlow = true;
+      modelStatus = null;
+    });
+    try {
+      final model = await SketchFlow.open(
+        transfer: transfer,
+        onDownload: (progress) {
+          final percent = (progress * 100).floor();
+          if (mounted && percent != modelPercent) {
+            setState(() => modelPercent = percent);
+          }
+        },
+      );
+      if (!mounted || transfer.paused) {
+        await model.dispose();
+        return;
+      }
+      setState(() => sketchFlow = model);
+    } catch (_) {
+      if (mounted && !transfer.paused) {
+        setState(() => modelStatus = '다운로드에 문제가 생겼어요. 다시 시도해 주세요.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          openingSketchFlow = false;
+          modelTransfer = null;
+        });
+      }
     }
   }
 
@@ -332,6 +350,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Future<void> start() async {
     if (pack.isEmpty || phase == Phase.preparing || playing) return;
+    if (SketchFlow.available && sketchFlow == null) {
+      setState(() => phase = Phase.download);
+      return;
+    }
     setState(() {
       phase = Phase.preparing;
       countdown = 3;
@@ -513,6 +535,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     refresh?.cancel();
     clock.stop();
     audio.dispose();
+    modelTransfer?.pause();
     unawaited(sketchFlow?.dispose());
     super.dispose();
   }
@@ -537,6 +560,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 maxWidth: phase == Phase.playing ? 920 : 560,
               ),
               child: switch (phase) {
+                Phase.download => downloadPage(),
                 Phase.home => home(),
                 Phase.preparing => prepare(),
                 Phase.playing => game(),
@@ -644,6 +668,93 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     ),
   );
 
+  Widget downloadPage() {
+    final complete = sketchFlow != null;
+    final progress = modelPercent;
+    final transferring = modelTransfer != null;
+    return spacedPage([
+      appTitle(),
+      Column(
+        children: [
+          title(
+            complete
+                ? '스케치북 준비 완료!'
+                : openingSketchFlow
+                ? '스케치북을 준비 중이에요'
+                : '스케치북 준비하기',
+            handwritten: true,
+            size: 32,
+            color: blue,
+          ),
+          if (!openingSketchFlow && !complete)
+            const Text(
+              '한 번 받으면 오프라인으로 플레이할 수 있어요',
+              textAlign: TextAlign.center,
+            ),
+        ],
+      ),
+      Center(
+        child: DownloadRabbit(
+          packing: transferring,
+          packed: complete || progress != null,
+          size: (MediaQuery.sizeOf(context).height * 0.38)
+              .clamp(160, 310)
+              .toDouble(),
+        ),
+      ),
+      Column(
+        children: [
+          if (openingSketchFlow || progress != null || complete) ...[
+            LinearProgressIndicator(
+              value: complete
+                  ? 1
+                  : progress == null
+                  ? null
+                  : progress / 100,
+              minHeight: 12,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            const SizedBox(height: 8),
+            if (progress != null && !complete)
+              title(progress == 100 ? '모델 확인 중' : '$progress%', size: 24),
+            const SizedBox(height: 10),
+          ],
+          if (modelStatus != null)
+            Text(modelStatus!, textAlign: TextAlign.center),
+          if (complete)
+            primary('시작', loading || error != null ? null : start)
+          else if (openingSketchFlow)
+            if (transferring)
+              OutlinedButton(
+                onPressed: modelTransfer!.paused || progress == 100
+                    ? null
+                    : () => setState(() => modelTransfer!.pause()),
+                child: const Text('일시정지'),
+              )
+            else
+              const SizedBox(height: 48)
+          else ...[
+            Text('약 ${SketchFlow.downloadMiB} MiB'),
+            const SizedBox(height: 8),
+            primary(
+              modelStatus != null
+                  ? '다시 시도'
+                  : progress != null
+                  ? '이어받기'
+                  : '다운로드',
+              enableModel,
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton(
+              onPressed: () => setState(() => phase = Phase.home),
+              child: const Text('나중에'),
+            ),
+          ],
+        ],
+      ),
+    ], distribution: MainAxisAlignment.spaceEvenly);
+  }
+
   Widget home() => spacedPage([
     Column(
       children: [
@@ -674,20 +785,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           primary(loading ? '불러오는 중' : '시작', loading ? null : start),
         const SizedBox(height: 12),
         title('최고 기록 $best개', size: 17),
-        if (SketchFlow.available && sketchFlow == null) ...[
-          TextButton(
-            onPressed: openingSketchFlow ? null : enableModel,
-            child: Text(
-              modelDownloaded
-                  ? 'AI 그림 켜기'
-                  : 'AI 그림 받기 (${SketchFlow.downloadMiB} MiB)',
-            ),
-          ),
-          if (openingSketchFlow) LinearProgressIndicator(value: modelProgress),
-          if (modelStatus != null)
-            Text(modelStatus!, textAlign: TextAlign.center),
-        ] else if (sketchFlow != null)
-          const Text('AI 그림 준비 완료'),
       ],
     ),
     Padding(
@@ -1104,6 +1201,96 @@ class SketchbookBinding extends CustomPainter {
 
   @override
   bool shouldRepaint(SketchbookBinding oldDelegate) => false;
+}
+
+class DownloadRabbit extends StatefulWidget {
+  const DownloadRabbit({
+    super.key,
+    required this.packing,
+    required this.packed,
+    required this.size,
+  });
+
+  final bool packing;
+  final bool packed;
+  final double size;
+
+  @override
+  State<DownloadRabbit> createState() => _DownloadRabbitState();
+}
+
+class _DownloadRabbitState extends State<DownloadRabbit>
+    with SingleTickerProviderStateMixin {
+  late final controller = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 4),
+  );
+
+  void updateAnimation() {
+    final animate =
+        widget.packing &&
+        TickerMode.valuesOf(context).enabled &&
+        !MediaQuery.disableAnimationsOf(context);
+    if (animate && !controller.isAnimating) {
+      controller.repeat();
+    } else if (!animate && controller.isAnimating) {
+      controller.reset();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    updateAnimation();
+  }
+
+  @override
+  void didUpdateWidget(DownloadRabbit oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    updateAnimation();
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: widget.size,
+    child: AnimatedBuilder(
+      animation: controller,
+      child: Image.asset(
+        '토끼의 낙서장 다운로드 아이들링.png',
+        fit: BoxFit.fill,
+        excludeFromSemantics: true,
+      ),
+      builder: (context, child) {
+        final elapsed = controller.lastElapsedDuration?.inMilliseconds ?? 0;
+        final frame = !controller.isAnimating
+            ? (widget.packed || widget.packing ? 2 : 0)
+            : elapsed < 250
+            ? 0
+            : elapsed < 500
+            ? 1
+            : controller.value > 0.94
+            ? 3
+            : 2;
+        return Stack(
+          children: [
+            Positioned(
+              left: -(frame % 2) * widget.size,
+              top: -(frame ~/ 2) * widget.size,
+              width: widget.size * 2,
+              height: widget.size * 2,
+              child: child!,
+            ),
+          ],
+        );
+      },
+    ),
+  );
 }
 
 class RabbitIdle extends StatefulWidget {

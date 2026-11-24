@@ -43,56 +43,80 @@ class SketchFlow {
   }
 
   static Future<SketchFlow> open({
-    void Function(String file, double? progress)? onDownload,
+    SketchFlowTransfer? transfer,
+    void Function(double progress)? onDownload,
   }) async {
     final directory = await _directory();
     await directory.create(recursive: true);
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 20);
-    Future<File> fetch(String name, String hash) async {
+    const dataSize = 3764098;
+    const modelSize = 121792379;
+    const total = dataSize + modelSize;
+    Future<File> fetch(String name, String hash, int size, int previous) async {
       final file = File('${directory.path}/$name');
       if (await file.exists()) return file;
-      if (onDownload == null) throw StateError('The model requires a download');
+      if (transfer == null) throw StateError('The model requires a download');
       final temporary = File('${file.path}.part');
-      try {
-        final request = await client.getUrl(Uri.parse('$_base/$name'));
+      var received = await temporary.exists() ? await temporary.length() : 0;
+      if (received > size) received = 0;
+
+      if (received != size) {
+        final request = await transfer.client.getUrl(Uri.parse('$_base/$name'));
+        request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+        if (received > 0) {
+          request.headers.set(HttpHeaders.rangeHeader, 'bytes=$received-');
+        }
         final response = await request.close().timeout(
           const Duration(seconds: 30),
         );
-        if (response.statusCode != HttpStatus.ok) {
-          throw HttpException('HTTP ${response.statusCode}');
+        if (response.statusCode == HttpStatus.ok) {
+          received = 0;
+        } else if (response.statusCode != HttpStatus.partialContent ||
+            response.headers.value(HttpHeaders.contentRangeHeader) !=
+                'bytes $received-${size - 1}/$size') {
+          throw HttpException(
+            'Unexpected model response: ${response.statusCode}',
+          );
         }
-        var received = 0;
-        final sink = temporary.openWrite();
+
+        onDownload?.call((previous + received) / total);
+        final sink = temporary.openWrite(
+          mode: received > 0 ? FileMode.append : FileMode.write,
+        );
         try {
           await sink.addStream(
             response.timeout(const Duration(seconds: 30)).map((chunk) {
               received += chunk.length;
-              onDownload(
-                name,
-                response.contentLength > 0
-                    ? received / response.contentLength
-                    : null,
-              );
+              if (received > size) {
+                throw const FormatException('Unexpected model size');
+              }
+              onDownload?.call((previous + received) / total);
               return chunk;
             }),
           );
         } finally {
           await sink.close();
         }
-        if ((await sha256.bind(temporary.openRead()).first).toString() !=
-            hash) {
-          throw const FormatException('SketchFlow file checksum mismatch');
-        }
-        return await temporary.rename(file.path);
-      } finally {
-        if (await temporary.exists()) await temporary.delete();
       }
+      if (transfer.paused) throw StateError('Model download paused');
+      if (received != size) {
+        throw const FormatException('Incomplete model download');
+      }
+      if ((await sha256.bind(temporary.openRead()).first).toString() != hash) {
+        await temporary.delete();
+        throw const FormatException('SketchFlow file checksum mismatch');
+      }
+      return temporary.rename(file.path);
     }
 
     try {
-      final data = await fetch('sketchflow.json', _dataHash);
-      final model = await fetch('sketchflow.onnx', _modelHash);
+      final data = await fetch('sketchflow.json', _dataHash, dataSize, 0);
+      final model = await fetch(
+        'sketchflow.onnx',
+        _modelHash,
+        modelSize,
+        dataSize,
+      );
+      if (transfer?.paused ?? false) throw StateError('Model download paused');
       final config =
           jsonDecode(await data.readAsString()) as Map<String, dynamic>;
       final session = await OnnxRuntime().createSession(
@@ -101,7 +125,7 @@ class SketchFlow {
       );
       return SketchFlow._(session, config);
     } finally {
-      client.close(force: true);
+      transfer?.close();
     }
   }
 
@@ -207,4 +231,16 @@ class SketchFlow {
       await _session.close();
     }
   }
+}
+
+class SketchFlowTransfer {
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 20);
+  bool paused = false;
+
+  void pause() {
+    paused = true;
+    close();
+  }
+
+  void close() => client.close(force: true);
 }

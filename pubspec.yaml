@@ -63,6 +63,7 @@ flutter:
   # the material Icons class.
   uses-material-design: true
   assets:
+    - 토끼의 낙서장 다운로드 아이들링.png
     - assets/audio/
     - assets/questions.json
     - assets/paper-rabbit.webp
