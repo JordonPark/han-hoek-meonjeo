@@ -37,6 +37,9 @@ dependencies:
   google_mobile_ads: ^9.2.0
   material_ui: ^1.11.1
   audioplayers: ^6.8.1
+  flutter_onnxruntime: ^1.9.1
+  path_provider: ^2.1.6
+  crypto: ^3.0.8
 
 dev_dependencies:
   flutter_test:

@@ -9,6 +9,7 @@ import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'game_audio.dart';
+import 'sketchflow.dart';
 
 const blue = Color(0xff2544c4);
 const paper = Color(0xfffff6e3);
@@ -66,7 +67,8 @@ class Sketchbook extends StatelessWidget {
 
 class Prompt {
   Prompt.fromJson(Map<String, dynamic> json)
-    : label = json['label'] as String,
+    : id = json['id'] as String,
+      label = json['label'] as String,
       drawings = (json['drawings'] as List).map((drawing) {
         final strokes = (drawing as List)
             .map((stroke) {
@@ -98,6 +100,7 @@ class Prompt {
             .toList();
       }).toList();
 
+  final String id;
   final String label;
   final List<List<List<Offset>>> drawings;
 }
@@ -144,6 +147,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int countdown = 3;
   bool loading = true;
   bool audioSettingsChanged = false;
+  SketchFlow? sketchFlow;
+  bool openingSketchFlow = false;
+  bool modelDownloaded = false;
+  bool preparingDrawing = false;
+  bool aiRound = false;
+  bool aiDrawing = false;
+  String? modelStatus;
+  double? modelProgress;
+  final generated = <String, List<List<Offset>>>{};
+  int round = 0;
 
   int get elapsed => clock.elapsedMilliseconds;
   bool get canSkip =>
@@ -162,6 +175,79 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     unawaited(loadPack());
     unawaited(loadPreferences());
+    if (SketchFlow.available) unawaited(checkModel());
+  }
+
+  Future<void> checkModel() async {
+    try {
+      final downloaded = await SketchFlow.isDownloaded();
+      if (mounted) setState(() => modelDownloaded = downloaded);
+    } catch (_) {
+      // The bundled game remains playable if the cache is unavailable.
+    }
+  }
+
+  Future<void> enableModel() async {
+    setState(() {
+      openingSketchFlow = true;
+      modelStatus = 'SketchFlow 준비 중';
+      modelProgress = null;
+    });
+    try {
+      final model = await SketchFlow.open(
+        onDownload: (file, progress) {
+          if (!mounted) return;
+          final percent = progress == null ? null : (progress * 100).floor();
+          final label = file.endsWith('.onnx') ? 'SketchFlow 모델' : '제시어 데이터';
+          final status = percent == null
+              ? '$label 다운로드 중'
+              : '$label 다운로드 $percent%';
+          if (status != modelStatus) {
+            setState(() {
+              modelStatus = status;
+              modelProgress = progress;
+            });
+          }
+        },
+      );
+      if (!mounted) {
+        await model.dispose();
+        return;
+      }
+      setState(() {
+        sketchFlow = model;
+        modelDownloaded = true;
+        modelStatus = null;
+      });
+    } catch (_) {
+      if (mounted) setState(() => modelStatus = '모델을 준비하지 못했어요. 다시 시도해 주세요.');
+    } finally {
+      if (mounted) setState(() => openingSketchFlow = false);
+    }
+  }
+
+  Future<void> prepareDrawing(Prompt selected) async {
+    final generation = round;
+    final job = sketchFlow?.prepare(selected.id);
+    if (job == null) return;
+    try {
+      final result = await job;
+      if (mounted &&
+          round == generation &&
+          deck.contains(selected) &&
+          result.isNotEmpty) {
+        generated[selected.id] = result;
+      }
+    } catch (_) {
+      // If inference fails, this question can use its bundled drawing.
+    }
+    if (mounted &&
+        playing &&
+        round == generation &&
+        deck.isNotEmpty &&
+        deck.last != selected) {
+      unawaited(prepareDrawing(deck.last));
+    }
   }
 
   Future<void> loadPack() async {
@@ -254,8 +340,21 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       missed.clear();
       deck = List<Prompt>.of(pack)..shuffle(random);
       clock.reset();
-      nextQuestion(skipped: false);
+      round++;
+      generated.clear();
+      aiRound = sketchFlow != null;
+      preparingDrawing = aiRound;
+      if (!preparingDrawing) nextQuestion(skipped: false);
     });
+    if (preparingDrawing) {
+      await prepareDrawing(deck.last)
+          .timeout(const Duration(seconds: 45), onTimeout: () {});
+      if (!mounted || phase != Phase.preparing) return;
+      setState(() {
+        preparingDrawing = false;
+        nextQuestion(skipped: false);
+      });
+    }
     while (countdown > 0) {
       audio.play(GameSound.countdown);
       await Future<void>.delayed(const Duration(seconds: 1));
@@ -320,7 +419,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         : level >= 4
         ? variants.skip(variants.length ~/ 2).toList()
         : variants;
-    drawing = pool[random.nextInt(pool.length)];
+    final fresh = generated.remove(selected.id);
+    aiDrawing = fresh != null;
+    drawing = fresh ?? pool[random.nextInt(pool.length)];
+    if (aiRound && deck.isNotEmpty) {
+      unawaited(prepareDrawing(deck.last));
+    }
     final labels =
         pack
             .map((p) => p.label)
@@ -409,6 +513,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     refresh?.cancel();
     clock.stop();
     audio.dispose();
+    unawaited(sketchFlow?.dispose());
     super.dispose();
   }
 
@@ -569,6 +674,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           primary(loading ? '불러오는 중' : '시작', loading ? null : start),
         const SizedBox(height: 12),
         title('최고 기록 $best개', size: 17),
+        if (SketchFlow.available && sketchFlow == null) ...[
+          TextButton(
+            onPressed: openingSketchFlow ? null : enableModel,
+            child: Text(
+              modelDownloaded
+                  ? 'AI 그림 켜기'
+                  : 'AI 그림 받기 (${SketchFlow.downloadMiB} MiB)',
+            ),
+          ),
+          if (openingSketchFlow) LinearProgressIndicator(value: modelProgress),
+          if (modelStatus != null)
+            Text(modelStatus!, textAlign: TextAlign.center),
+        ] else if (sketchFlow != null)
+          const Text('AI 그림 준비 완료'),
       ],
     ),
     Padding(
@@ -630,10 +749,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       child: AnimatedSwitcher(
         duration: const Duration(milliseconds: 160),
         child: KeyedSubtree(
-          key: ValueKey(countdown),
+          key: ValueKey(preparingDrawing ? -1 : countdown),
           child: title(
-            countdown == 0 ? '게임 시작!' : '$countdown',
-            size: 46,
+            preparingDrawing
+                ? '첫 그림 그리는 중'
+                : countdown == 0
+                ? '게임 시작!'
+                : '$countdown',
+            size: preparingDrawing ? 28 : 46,
             color: blue,
           ),
         ),
@@ -677,6 +800,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             ),
           ),
           const SizedBox(width: 12),
+          if (aiRound) Text(aiDrawing ? 'AI 그림' : '저장된 그림'),
           Expanded(
             child: FittedBox(
               fit: BoxFit.scaleDown,

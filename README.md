@@ -14,8 +14,19 @@ flutter run
 - 카운트다운, 시작, 정답, 오답, 종료 효과음과 라운드 배경음악을 로컬 오디오 파일로 재생한다. 홈에서 음악과 효과음을 각각 끌 수 있으며, 앱이 백그라운드에 있으면 재생을 멈춘다.
 - iPhone Duo에서 접힘 상태에 따라 레이아웃을 다시 계산한다. 접힌 화면은 옆 시스템 영역을 피하고, 펼친 화면에 충분한 폭이 생기면 그림판과 답안을 나란히 배치한다. 전환 중에도 현재 문제와 타이머는 이어진다.
 - 현재 구현은 오프라인에서 345개 카테고리의 미리 저장된 획을 재생한다. 그림은 Google Quick, Draw! 샘플을 골라 한국어 라벨과 함께 재포장했다. 전체 그림과 보기의 사람이 하는 검수는 남아 있다. [데이터 출처](https://github.com/googlecreativelab/quickdraw-dataset) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
-- 아래 첫 실행 다운로드 시안은 SketchFlow 통합을 위한 설계다. 공개 체크포인트는 데스크톱 PyTorch용이고, 모바일 변환 결과와 실기기 검증이 준비되면 모델 다운로드와 기기 내 새 획 생성을 연결한다.
+- Android와 iOS 16 이상에서 홈의 `AI 그림 받기`로 약 120 MiB의 SketchFlow 팩을 설치할 수 있다. 팩이 저장된 뒤에는 오프라인에서도 `AI 그림 켜기`로 사용할 수 있다. 첫 그림은 카운트다운 전에 생성하고, 다음 그림은 플레이 중에 미리 생성한다. 생성이 늦거나 실패하면 게임 타이머를 유지하며 저장된 그림을 보여준다. 게임 화면에서 각 그림의 출처를 표시한다.
 - 홈과 결과의 배너는 Android 및 iOS 공식 AdMob 테스트 ID를 사용한다. 출시 빌드에는 계정의 실제 앱 및 배너 ID, 광고 동의 흐름과 스토어 개인정보 설정이 필요하다. 현재 테스트 배너는 게임을 가리지 않으며, 오프라인에서 광고가 실패해도 플레이할 수 있다. [AdMob Flutter 가이드](https://developers.google.com/admob/flutter/quick-start)
+
+### SketchFlow 모델 팩
+
+공식 체크포인트의 디코더를 ONNX로 옮기고, 제시어 345개의 텍스트 조건은 빌드 전에 계산한다. 앱은 받은 디코더로 256점의 획 좌표를 기기에서 새로 생성한다. 모델과 조건 파일은 다운로드가 끝난 뒤 SHA-256을 검증하고 캐시에 저장한다. OS가 캐시를 정리하면 홈에서 다시 받을 수 있다. [원본 모델과 MIT 라이선스](https://github.com/doudin404/SketchFlow)
+
+공식 소스와 v1 체크포인트, 원본 추론 의존성 및 `onnx`, `onnxruntime`을 준비한 뒤 아래 명령을 실행한다. 배포 파일을 교체할 때는 `lib/sketchflow.dart`의 다운로드 주소와 해시도 갱신한다.
+
+```sh
+python tools/export_sketchflow.py path/to/SketchFlow path/to/sketchflow_v1.ckpt path/to/output
+python tools/check_sketchflow.py path/to/output
+```
 
 ## 제품 기획
 

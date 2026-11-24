@@ -1,0 +1,210 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+import 'dart:ui';
+
+import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
+import 'package:path_provider/path_provider.dart';
+
+class SketchFlow {
+  static const _base =
+      'https://github.com/JordonPark/han-hoek-meonjeo/releases/download/sketchflow-mobile-v1';
+  static const _modelHash =
+      '41fea316430c4992dea6d96502de3a4231fecc5956bcfc390eb6be637363f6dc';
+  static const _dataHash =
+      '1349bfd0d20c0498f83f1c5a0448195a70d266a5ae66d029757940db361b6962';
+  static const downloadMiB = 120;
+  static bool get available =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
+  final OrtSession _session;
+  final Map<String, dynamic> _data;
+  final Random _random = Random();
+  Future<List<List<Offset>>>? _pending;
+  bool _disposed = false;
+
+  SketchFlow._(this._session, this._data);
+
+  static Future<Directory> _directory() async {
+    final cache = await getApplicationCacheDirectory();
+    return Directory('${cache.path}/sketchflow-${_modelHash.substring(0, 12)}');
+  }
+
+  static Future<bool> isDownloaded() async {
+    if (!available) return false;
+    final directory = await _directory();
+    return File('${directory.path}/sketchflow.onnx').existsSync() &&
+        File('${directory.path}/sketchflow.json').existsSync();
+  }
+
+  static Future<SketchFlow> open({
+    void Function(String file, double? progress)? onDownload,
+  }) async {
+    final directory = await _directory();
+    await directory.create(recursive: true);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 20);
+    Future<File> fetch(String name, String hash) async {
+      final file = File('${directory.path}/$name');
+      if (await file.exists()) return file;
+      if (onDownload == null) throw StateError('The model requires a download');
+      final temporary = File('${file.path}.part');
+      try {
+        final request = await client.getUrl(Uri.parse('$_base/$name'));
+        final response = await request.close().timeout(
+          const Duration(seconds: 30),
+        );
+        if (response.statusCode != HttpStatus.ok) {
+          throw HttpException('HTTP ${response.statusCode}');
+        }
+        var received = 0;
+        final sink = temporary.openWrite();
+        try {
+          await sink.addStream(
+            response.timeout(const Duration(seconds: 30)).map((chunk) {
+              received += chunk.length;
+              onDownload(
+                name,
+                response.contentLength > 0
+                    ? received / response.contentLength
+                    : null,
+              );
+              return chunk;
+            }),
+          );
+        } finally {
+          await sink.close();
+        }
+        if ((await sha256.bind(temporary.openRead()).first).toString() !=
+            hash) {
+          throw const FormatException('SketchFlow file checksum mismatch');
+        }
+        return await temporary.rename(file.path);
+      } finally {
+        if (await temporary.exists()) await temporary.delete();
+      }
+    }
+
+    try {
+      final data = await fetch('sketchflow.json', _dataHash);
+      final model = await fetch('sketchflow.onnx', _modelHash);
+      final config =
+          jsonDecode(await data.readAsString()) as Map<String, dynamic>;
+      final session = await OnnxRuntime().createSession(
+        model.path,
+        options: OrtSessionOptions(intraOpNumThreads: 3, interOpNumThreads: 1),
+      );
+      return SketchFlow._(session, config);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<List<List<Offset>>>? prepare(String id) {
+    if (_disposed || _pending != null) return null;
+    final work = _generate(id).whenComplete(() => _pending = null);
+    return _pending = work;
+  }
+
+  double _gaussian() =>
+      sqrt(-2 * log(1 - _random.nextDouble())) *
+      cos(2 * pi * _random.nextDouble());
+
+  Future<List<List<Offset>>> _generate(String id) async {
+    final values = (_data['conditions'] as Map)[id] as List;
+    final condition = await OrtValue.fromList(
+      Float32List.fromList(values.cast<double>()),
+      [1, 512],
+    );
+    final points = Float32List.fromList(List.generate(768, (_) => _gaussian()));
+    try {
+      for (final row in _data['steps'] as List) {
+        if (_disposed) return [];
+        final step = (row as List).cast<num>();
+        final OrtValue input = await OrtValue.fromList(points, [1, 256, 3]);
+        OrtValue? timestep;
+        Map<String, OrtValue>? outputs;
+        try {
+          timestep = await OrtValue.fromList(
+            Int64List.fromList([step[0].toInt()]),
+            [1],
+          );
+          outputs = await _session.run({
+            'points': input,
+            'timestep': timestep,
+            'condition': condition,
+          });
+          final noise = (await outputs['noise']!.asFlattenedList()).cast<num>();
+          final signal = sqrt(step[1]);
+          final scale = sqrt(1 - step[1]);
+          for (var i = 0; i < points.length; i++) {
+            final predicted = (points[i] - scale * noise[i]) / signal;
+            points[i] =
+                step[2] * predicted +
+                step[3] * points[i] +
+                (step[4] == 0 ? 0 : step[4] * _gaussian());
+          }
+        } finally {
+          await input.dispose();
+          await timestep?.dispose();
+          if (outputs != null) {
+            for (final output in outputs.values) {
+              await output.dispose();
+            }
+          }
+        }
+      }
+      return _strokes(points, (_data['penScale'] as num).toDouble());
+    } finally {
+      await condition.dispose();
+    }
+  }
+
+  List<List<Offset>> _strokes(Float32List values, double penScale) {
+    if (values.any((value) => !value.isFinite)) return [];
+    final strokes = <List<Offset>>[];
+    var stroke = <Offset>[];
+    for (var i = 3; i < values.length; i += 3) {
+      if (values[i + 2] > penScale / 2) {
+        if (stroke.isEmpty) stroke.add(Offset(values[i - 3], values[i - 2]));
+        stroke.add(Offset(values[i], values[i + 1]));
+      } else if (stroke.isNotEmpty) {
+        strokes.add(stroke);
+        stroke = [];
+      }
+    }
+    if (stroke.isNotEmpty) strokes.add(stroke);
+    final points = strokes.expand((stroke) => stroke).toList();
+    if (points.length < 8) return [];
+    final xs = points.map((p) => p.dx);
+    final ys = points.map((p) => p.dy);
+    final left = xs.reduce(min), right = xs.reduce(max);
+    final top = ys.reduce(min), bottom = ys.reduce(max);
+    final extent = max(right - left, bottom - top);
+    if (extent <= 0) return [];
+    final mid = Offset((left + right) / 2, (top + bottom) / 2);
+    return strokes
+        .map(
+          (s) => s
+              .map((p) => (p - mid) * (0.85 / extent) + const Offset(0.5, 0.5))
+              .toList(),
+        )
+        .toList();
+  }
+
+  Future<void> dispose() async {
+    _disposed = true;
+    try {
+      await _pending;
+    } catch (_) {
+      // The round already handles failed inference.
+    } finally {
+      await _session.close();
+    }
+  }
+}
