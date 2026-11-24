@@ -676,15 +676,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       appTitle(),
       Column(
         children: [
-          title(
-            complete
-                ? '스케치북 준비 완료!'
-                : openingSketchFlow
-                ? '스케치북을 준비 중이에요'
-                : '스케치북 준비하기',
-            handwritten: true,
-            size: 32,
-            color: blue,
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: title(
+              complete
+                  ? '스케치북 준비 완료!'
+                  : openingSketchFlow
+                  ? '스케치북을 준비 중이에요'
+                  : '스케치북 준비하기',
+              handwritten: true,
+              singleLine: true,
+              size: 32,
+              color: blue,
+            ),
           ),
           if (!openingSketchFlow && !complete)
             const Text(

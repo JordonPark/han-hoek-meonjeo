@@ -1,10 +1,58 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:rabbit_sketchbook/main.dart';
+import 'package:rabbit_sketchbook/sketchflow.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+class _LoadedSketchFlow implements SketchFlow {
+  @override
+  Future<void> dispose() async {}
+
+  @override
+  Future<List<List<Offset>>>? prepare(String id) => null;
+}
+
 void main() {
+  testWidgets('download headings fit on one line with side insets', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.viewPadding = const FakeViewPadding(right: 72);
+    addTearDown(tester.view.reset);
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    SharedPreferences.setMockInitialValues({});
+    addTearDown(() => rootBundle.evict('assets/questions.json'));
+    await tester.pumpWidget(const Sketchbook());
+    final dynamic game = tester.state(find.byType(GameScreen));
+    game.setState(() => game.phase = Phase.download);
+
+    Future<void> expectHeading(String text) async {
+      await tester.pump();
+      final heading = find.text(text);
+      expect(tester.widget<Text>(heading).maxLines, 1);
+      expect(tester.widget<Text>(heading).softWrap, isFalse);
+      final fitted = find
+          .ancestor(of: heading, matching: find.byType(FittedBox))
+          .first;
+      expect(tester.widget<FittedBox>(fitted).fit, BoxFit.scaleDown);
+      expect(tester.getSize(fitted).width, lessThanOrEqualTo(230));
+    }
+
+    await expectHeading('스케치북 준비하기');
+    game.setState(() => game.openingSketchFlow = true);
+    await expectHeading('스케치북을 준비 중이에요');
+    game.setState(() {
+      game.openingSketchFlow = false;
+      game.sketchFlow = _LoadedSketchFlow();
+    });
+    await expectHeading('스케치북 준비 완료!');
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('the rabbit moves only when animations are enabled', (
     tester,
   ) async {
