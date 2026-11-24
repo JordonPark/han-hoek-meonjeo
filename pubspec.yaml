@@ -62,7 +62,8 @@ flutter:
   assets:
     - assets/audio/
     - assets/questions.json
-    - assets/home-rabbit.png
+    - assets/paper-rabbit.webp
+    - assets/wrinkled-paper.webp
     - assets/open-rabbit.png
     - assets/fonts/Gaegu-OFL.txt
   fonts:

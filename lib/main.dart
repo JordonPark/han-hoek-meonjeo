@@ -13,6 +13,7 @@ import 'game_audio.dart';
 const blue = Color(0xff2544c4);
 const paper = Color(0xfffff6e3);
 const ink = Color(0xff31271c);
+const paperTexture = AssetImage('assets/wrinkled-paper.webp');
 
 double strokeProgressAt({
   required int elapsedMs,
@@ -418,19 +419,25 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     // when the system status area removes space from only one edge.
     final sideInset = max(insets.left, insets.right);
     return Scaffold(
-      body: SafeArea(
-        minimum: EdgeInsets.symmetric(horizontal: sideInset),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: phase == Phase.playing ? 920 : 560,
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: paper,
+          image: DecorationImage(image: paperTexture, fit: BoxFit.cover),
+        ),
+        child: SafeArea(
+          minimum: EdgeInsets.symmetric(horizontal: sideInset),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: phase == Phase.playing ? 920 : 560,
+              ),
+              child: switch (phase) {
+                Phase.home => home(),
+                Phase.preparing => prepare(),
+                Phase.playing => game(),
+                Phase.results => results(),
+              },
             ),
-            child: switch (phase) {
-              Phase.home => home(),
-              Phase.preparing => prepare(),
-              Phase.playing => game(),
-              Phase.results => results(),
-            },
           ),
         ),
       ),
@@ -456,22 +463,51 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     ),
   );
 
-  Widget appTitle() => FittedBox(
-    fit: BoxFit.scaleDown,
-    child: title('토끼의 낙서장', size: 44, handwritten: true, singleLine: true),
+  Widget appTitle() => Column(
+    children: [
+      FittedBox(
+        fit: BoxFit.scaleDown,
+        child: title('토끼의 낙서장', size: 44, handwritten: true, singleLine: true),
+      ),
+      const SizedBox(
+        width: 172,
+        height: 13,
+        child: CustomPaint(painter: BrushUnderline(blue)),
+      ),
+    ],
   );
 
   Widget primary(String label, VoidCallback? action) => SizedBox(
     width: double.infinity,
-    child: FilledButton(
-      style: FilledButton.styleFrom(
-        backgroundColor: blue,
-        foregroundColor: Colors.white,
-        minimumSize: const Size(0, 55),
-        textStyle: const TextStyle(fontSize: 23, fontWeight: FontWeight.w800),
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(19),
+        color: action == null ? null : blue,
+        image: action == null
+            ? null
+            : const DecorationImage(
+                image: paperTexture,
+                fit: BoxFit.cover,
+                colorFilter: ColorFilter.mode(blue, BlendMode.multiply),
+              ),
       ),
-      onPressed: action,
-      child: Text(label),
+      child: FilledButton(
+        style: FilledButton.styleFrom(
+          backgroundColor: Colors.transparent,
+          foregroundColor: Colors.white,
+          minimumSize: const Size(0, 55),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(19),
+          ),
+          textStyle: const TextStyle(
+            fontFamily: 'Gaegu',
+            fontSize: 34,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        onPressed: action,
+        child: Text(label),
+      ),
     ),
   );
 
@@ -510,9 +546,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     Padding(
       padding: const EdgeInsets.symmetric(vertical: 20),
       child: Image.asset(
-        'assets/home-rabbit.png',
-        height: (MediaQuery.sizeOf(context).height * 0.32)
-            .clamp(170, 300)
+        'assets/paper-rabbit.webp',
+        height: (MediaQuery.sizeOf(context).height * 0.37)
+            .clamp(170, 330)
             .toDouble(),
         fit: BoxFit.contain,
         excludeFromSemantics: true,
@@ -742,7 +778,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     Column(
       children: [
         title('시간 종료', size: 34, handwritten: true),
-        title('$score개 정답', size: 49, color: blue),
+        const SizedBox(
+          width: 122,
+          height: 13,
+          child: CustomPaint(painter: BrushUnderline(blue)),
+        ),
+        const SizedBox(height: 8),
+        CustomPaint(
+          painter: ScoreBrush(),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+            child: title('$score개 정답', size: 49, color: blue),
+          ),
+        ),
         title('최고 기록 $best개', size: 17),
       ],
     ),
@@ -762,7 +810,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   children: [
                     for (final (label, strokes) in missed)
                       SizedBox(
-                        width: missed.length == 1 ? 176 : 136,
+                        width: missed.length == 1 ? 216 : 152,
                         child: Column(
                           children: [
                             AspectRatio(
@@ -783,10 +831,31 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       ),
     Column(
       children: [
-        primary('한 판 더', start),
-        TextButton(
-          onPressed: () => setState(() => phase = Phase.home),
-          child: const Text('홈으로'),
+        Row(
+          children: [
+            Expanded(child: primary('한 판 더', start)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: ink,
+                  backgroundColor: const Color(0xccfff8ea),
+                  minimumSize: const Size(0, 55),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(19),
+                  ),
+                  side: const BorderSide(color: ink, width: 1.5),
+                  textStyle: const TextStyle(
+                    fontFamily: 'Gaegu',
+                    fontSize: 27,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                onPressed: () => setState(() => phase = Phase.home),
+                child: const Text('홈으로'),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 12),
         const AdBanner(),
@@ -795,17 +864,113 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   ]);
 
   Widget sketch(List<List<Offset>> strokes, double progress, bool pencil) =>
-      DecoratedBox(
-        decoration: BoxDecoration(
-          color: const Color(0xfffffbef),
-          border: Border.all(color: ink, width: 2),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: CustomPaint(painter: StrokePainter(strokes, progress, pencil)),
+      Padding(
+        padding: const EdgeInsets.only(top: 5, bottom: 5),
+        child: CustomPaint(
+          foregroundPainter: const SketchbookBinding(),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xfffffbef),
+              image: const DecorationImage(
+                image: paperTexture,
+                fit: BoxFit.cover,
+                opacity: 0.42,
+              ),
+              border: Border.all(color: ink, width: 1.7),
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: const [
+                BoxShadow(color: Color(0xffd9c49c), offset: Offset(0, 4)),
+                BoxShadow(color: Color(0xff6b5437), offset: Offset(0, 6)),
+              ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: CustomPaint(
+                painter: StrokePainter(strokes, progress, pencil),
+              ),
+            ),
+          ),
         ),
       );
+}
+
+class BrushUnderline extends CustomPainter {
+  const BrushUnderline(this.color);
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()
+      ..moveTo(size.width * 0.04, size.height * 0.80)
+      ..quadraticBezierTo(
+        size.width * .48,
+        -size.height * .42,
+        size.width * .96,
+        size.height * .70,
+      );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.8
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(BrushUnderline oldDelegate) => oldDelegate.color != color;
+}
+
+class ScoreBrush extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()
+      ..moveTo(9, size.height * .14)
+      ..lineTo(size.width * .83, size.height * .08)
+      ..quadraticBezierTo(
+        size.width * 1.05,
+        size.height * .12,
+        size.width - 3,
+        size.height * .44,
+      )
+      ..lineTo(size.width - 9, size.height * .87)
+      ..lineTo(size.width * .17, size.height * .95)
+      ..quadraticBezierTo(-7, size.height * .90, 4, size.height * .48)
+      ..close();
+    canvas.drawPath(path, Paint()..color = const Color(0xfff7c9bd));
+  }
+
+  @override
+  bool shouldRepaint(ScoreBrush oldDelegate) => false;
+}
+
+class SketchbookBinding extends CustomPainter {
+  const SketchbookBinding();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final ring = Paint()
+      ..color = ink
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.9
+      ..strokeCap = StrokeCap.round;
+    final hole = Paint()..color = ink;
+    final count = (size.width / 46).floor().clamp(2, 8);
+    for (var i = 0; i < count; i++) {
+      final x = size.width * (i + 1) / (count + 1);
+      canvas.drawCircle(Offset(x + 4, 8), 2.0, hole);
+      canvas.drawPath(
+        Path()
+          ..moveTo(x - 5, 2)
+          ..cubicTo(x - 5, -12, x + 7, -12, x + 4, 8),
+        ring,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(SketchbookBinding oldDelegate) => false;
 }
 
 class StrokePainter extends CustomPainter {
