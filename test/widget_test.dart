@@ -5,6 +5,20 @@ import 'package:rabbit_sketchbook/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('strokes accelerate smoothly over the round', () {
+    double progress(int elapsed, int start) => strokeProgressAt(
+      elapsedMs: elapsed,
+      questionStartedMs: start,
+      level: 3,
+    );
+    expect(progress(50000, 50000), 0);
+    expect(progress(51000, 50000), greaterThan(progress(1000, 0)));
+    expect(
+      progress(51001, 50000) - progress(51000, 50000),
+      inInclusiveRange(0.0, 0.001),
+    );
+    expect(progress(60000, 50000), 1);
+  });
   testWidgets(
     'starts an offline round with four options and skipping initially disabled',
     (tester) async {

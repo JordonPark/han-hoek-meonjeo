@@ -12,6 +12,18 @@ const blue = Color(0xff2544c4);
 const paper = Color(0xfffff6e3);
 const ink = Color(0xff31271c);
 
+double strokeProgressAt({
+  required int elapsedMs,
+  required int questionStartedMs,
+  required int level,
+}) {
+  final end = elapsedMs.clamp(0, 60000);
+  final start = questionStartedMs.clamp(0, end);
+  // Integrate a linear increase from 1× to 2× over the round.
+  final drawingTime = (end - start) * (1 + (start + end) / 120000);
+  return (drawingTime / (1700 + level * 1050)).clamp(0.0, 1.0);
+}
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const Sketchbook());
@@ -471,7 +483,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         max(0.0, constraints.maxWidth - 40),
         max(130.0, constraints.maxHeight - 295),
       );
-      final progress = (questionAge / (1700 + level * 1050)).clamp(0.0, 1.0);
+      final progress = strokeProgressAt(
+        elapsedMs: elapsed,
+        questionStartedMs: questionAt,
+        level: level,
+      );
       final timer =
           '${(seconds ~/ 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
       return spacedPage([
