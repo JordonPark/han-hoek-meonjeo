@@ -8,6 +8,8 @@ void main() {
   testWidgets(
     'starts an offline round with four options and skipping initially disabled',
     (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
       debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       addTearDown(() => debugDefaultTargetPlatformOverride = null);
       SharedPreferences.setMockInitialValues({});
@@ -28,6 +30,7 @@ void main() {
       });
       final start = find.widgetWithText(FilledButton, '시작');
       expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
+      expect(tester.getBottomLeft(start).dy, lessThan(844));
       await tester.tap(start);
       await tester.pump();
       for (final label in ['3', '2', '1']) {
@@ -42,6 +45,7 @@ void main() {
       expect(find.text('01:00'), findsOneWidget);
       expect(find.byType(OutlinedButton), findsNWidgets(4));
       expect(tester.widget<TextButton>(skip).onPressed, isNull);
+      expect(tester.getBottomLeft(skip).dy, lessThan(844));
       await tester.pumpWidget(const SizedBox());
     },
   );

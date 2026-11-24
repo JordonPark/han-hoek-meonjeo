@@ -368,46 +368,84 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     children: children,
   );
 
-  Widget home() => page([
-    title('토끼의 낙서장'),
-    const SizedBox(height: 10),
-    title('60초 동안 그림을 맞혀요', size: 19),
-    Image.asset(
-      'assets/home-rabbit.png',
-      height: 270,
-      fit: BoxFit.contain,
-      excludeFromSemantics: true,
-    ),
-    if (error != null) ...[
-      Text(error!, textAlign: TextAlign.center),
-      primary('다시 시도', loadPack),
-    ] else
-      primary(loading ? '불러오는 중' : '시작', loading ? null : start),
-    const SizedBox(height: 12),
-    title('최고 기록 $best개', size: 17),
-    const SizedBox(height: 18),
-    const AdBanner(),
-    TextButton(
-      onPressed: () => showAboutDialog(
-        context: context,
-        applicationName: '토끼의 낙서장',
-        children: const [
-          Text('그림 데이터: Google Quick, Draw! (CC BY 4.0)'),
-          SelectableText(
-            'https://github.com/googlecreativelab/quickdraw-dataset',
+  Widget spacedPage(List<Widget> sections, {double horizontal = 24}) =>
+      LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          padding: EdgeInsets.symmetric(horizontal: horizontal, vertical: 16),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight: max(0, constraints.maxHeight - 32),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: sections,
+            ),
           ),
-          SelectableText('https://creativecommons.org/licenses/by/4.0/'),
+        ),
+      );
+
+  Widget home() => spacedPage([
+    Column(
+      children: [
+        title('토끼의 낙서장'),
+        const SizedBox(height: 10),
+        title('60초 동안 그림을 맞혀요', size: 19),
+      ],
+    ),
+    Padding(
+      padding: const EdgeInsets.symmetric(vertical: 20),
+      child: Image.asset(
+        'assets/home-rabbit.png',
+        height: (MediaQuery.sizeOf(context).height * 0.30)
+            .clamp(170, 300)
+            .toDouble(),
+        fit: BoxFit.contain,
+        excludeFromSemantics: true,
+      ),
+    ),
+    Column(
+      children: [
+        if (error != null) ...[
+          Text(error!, textAlign: TextAlign.center),
+          primary('다시 시도', loadPack),
+        ] else
+          primary(loading ? '불러오는 중' : '시작', loading ? null : start),
+        const SizedBox(height: 12),
+        title('최고 기록 $best개', size: 17),
+      ],
+    ),
+    Padding(
+      padding: const EdgeInsets.only(top: 24),
+      child: Column(
+        children: [
+          const AdBanner(),
+          TextButton(
+            onPressed: () => showAboutDialog(
+              context: context,
+              applicationName: '토끼의 낙서장',
+              children: const [
+                Text('그림 데이터: Google Quick, Draw! (CC BY 4.0)'),
+                SelectableText(
+                  'https://github.com/googlecreativelab/quickdraw-dataset',
+                ),
+                SelectableText('https://creativecommons.org/licenses/by/4.0/'),
+              ],
+            ),
+            child: const Text('앱 정보'),
+          ),
         ],
       ),
-      child: const Text('앱 정보'),
     ),
   ]);
 
-  Widget prepare() => page([
+  Widget prepare() => spacedPage([
     title('토끼의 낙서장'),
     Image.asset(
       'assets/open-rabbit.png',
-      height: 300,
+      height: (MediaQuery.sizeOf(context).height * 0.35)
+          .clamp(170, 300)
+          .toDouble(),
       fit: BoxFit.contain,
       excludeFromSemantics: true,
     ),
@@ -430,51 +468,53 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   Widget game() => LayoutBuilder(
     builder: (context, constraints) {
       final canvasSize = min(
-        constraints.maxWidth - 36,
-        max(130.0, constraints.maxHeight - 245),
+        max(0.0, constraints.maxWidth - 40),
+        max(130.0, constraints.maxHeight - 295),
       );
       final progress = (questionAge / (1700 + level * 1050)).clamp(0.0, 1.0);
       final timer =
           '${(seconds ~/ 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
-      return ListView(
-        padding: const EdgeInsets.fromLTRB(18, 12, 18, 8),
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              title(
-                timer,
-                size: 30,
-                color: seconds <= 10 ? Colors.red.shade800 : ink,
-              ),
-              title('$score점', size: 24),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Center(
+      return spacedPage([
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            title(
+              timer,
+              size: 30,
+              color: seconds <= 10 ? Colors.red.shade800 : ink,
+            ),
+            title('$score점', size: 24),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Center(
             child: SizedBox.square(
               dimension: canvasSize,
               child: sketch(drawing, progress, true),
             ),
           ),
-          const SizedBox(height: 12),
-          for (var row = 0; row < 2; row++) ...[
-            Row(
-              children: [
-                for (var column = 0; column < 2; column++) ...[
-                  if (column == 1) const SizedBox(width: 8),
-                  Expanded(child: choice(options[row * 2 + column])),
+        ),
+        Column(
+          children: [
+            for (var row = 0; row < 2; row++) ...[
+              Row(
+                children: [
+                  for (var column = 0; column < 2; column++) ...[
+                    if (column == 1) const SizedBox(width: 12),
+                    Expanded(child: choice(options[row * 2 + column])),
+                  ],
                 ],
-              ],
+              ),
+              const SizedBox(height: 10),
+            ],
+            TextButton(
+              onPressed: questionAge >= 2000 ? skip : null,
+              child: const Text('건너뛰기'),
             ),
-            const SizedBox(height: 7),
           ],
-          TextButton(
-            onPressed: questionAge >= 2000 ? skip : null,
-            child: const Text('건너뛰기'),
-          ),
-        ],
-      );
+        ),
+      ], horizontal: 20);
     },
   );
 
@@ -483,7 +523,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     return OutlinedButton(
       onPressed: wrong || elapsed < lockedUntil ? null : () => answer(option),
       style: OutlinedButton.styleFrom(
-        minimumSize: const Size(0, 52),
+        minimumSize: const Size(0, 54),
+        textStyle: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
         foregroundColor: ink,
         side: BorderSide(color: wrong ? Colors.red.shade700 : ink),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
