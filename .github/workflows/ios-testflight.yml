@@ -1,0 +1,76 @@
+name: Rabbit Sketchbook TestFlight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rabbit-sketchbook-testflight
+
+jobs:
+  upload:
+    if: github.ref == 'refs/heads/main'
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Flutter
+        run: |
+          git clone --depth 1 --branch 3.50.1 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Archive the iOS app
+        run: |
+          flutter pub get --enforce-lockfile
+          flutter build ipa --release --no-codesign --no-pub --build-name=1.0.0 --build-number="$GITHUB_RUN_NUMBER"
+          test -f build/ios/archive/Runner.xcarchive/Info.plist
+
+      - name: Sign and upload for internal TestFlight
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ vars.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ vars.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          if [[ ! "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ || ! "$ASC_KEY_ID" =~ ^[A-Z0-9]{10}$ || -z "$ASC_ISSUER_ID" || -z "$ASC_PRIVATE_KEY" ]]; then
+            echo '::error::Missing App Store Connect signing credentials.'
+            exit 1
+          fi
+
+          umask 077
+          scratch=$(mktemp -d "$RUNNER_TEMP/rabbit-sign.XXXXXX")
+          trap 'rm -rf "$scratch"' EXIT
+          key="$scratch/AuthKey_$ASC_KEY_ID.p8"
+          printf '%s\n' "$ASC_PRIVATE_KEY" > "$key"
+          unset ASC_PRIVATE_KEY
+
+          archive="$PWD/build/ios/archive/Runner.xcarchive"
+          bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:CFBundleIdentifier' "$archive/Info.plist")
+          test "$bundle_id" = com.jordonpark.rabbitSketchbook
+
+          for name in GoogleMobileAds UserMessagingPlatform; do
+            framework="$archive/Products/Applications/Runner.app/Frameworks/$name.framework"
+            if [[ -d "$framework" ]]; then
+              codesign --force --sign - "$framework"
+              codesign --verify --strict "$framework"
+            fi
+          done
+
+          options="$scratch/ExportOptions.plist"
+          plutil -create xml1 "$options"
+          plutil -insert method -string app-store-connect "$options"
+          plutil -insert destination -string upload "$options"
+          plutil -insert signingStyle -string automatic "$options"
+          plutil -insert teamID -string "$APPLE_TEAM_ID" "$options"
+          plutil -insert manageAppVersionAndBuildNumber -bool NO "$options"
+          plutil -insert testFlightInternalTestingOnly -bool YES "$options"
+
+          xcodebuild -exportArchive -archivePath "$archive" \
+            -exportPath "$scratch/export" -exportOptionsPlist "$options" \
+            -allowProvisioningUpdates -authenticationKeyPath "$key" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
