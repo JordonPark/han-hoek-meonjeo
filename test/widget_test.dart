@@ -30,8 +30,14 @@ void main() {
       expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
       await tester.tap(start);
       await tester.pump();
-      expect(find.text('첫 문제 준비 중'), findsOneWidget);
-      await tester.pump(const Duration(milliseconds: 650));
+      for (final label in ['3', '2', '1']) {
+        expect(find.text(label), findsOneWidget);
+        expect(find.text('01:00'), findsNothing);
+        await tester.pump(const Duration(seconds: 1));
+      }
+      expect(find.text('게임 시작!'), findsOneWidget);
+      expect(find.text('01:00'), findsNothing);
+      await tester.pump(const Duration(milliseconds: 450));
       final skip = find.widgetWithText(TextButton, '건너뛰기');
       expect(find.text('01:00'), findsOneWidget);
       expect(find.byType(OutlinedButton), findsNWidgets(4));

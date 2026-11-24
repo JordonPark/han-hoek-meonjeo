@@ -108,6 +108,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int level = 1;
   int questionAt = 0;
   int lockedUntil = 0;
+  int countdown = 3;
   bool loading = true;
 
   int get elapsed => clock.elapsedMilliseconds;
@@ -176,16 +177,24 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Future<void> start() async {
     if (pack.isEmpty || phase == Phase.preparing || playing) return;
-    setState(() => phase = Phase.preparing);
-    await Future<void>.delayed(const Duration(milliseconds: 650));
-    if (!mounted || phase != Phase.preparing) return;
     setState(() {
+      phase = Phase.preparing;
+      countdown = 3;
       score = 0;
       level = 1;
       missed.clear();
       deck = List<Prompt>.of(pack)..shuffle(random);
       clock.reset();
       nextQuestion(skipped: false);
+    });
+    while (countdown > 0) {
+      await Future<void>.delayed(const Duration(seconds: 1));
+      if (!mounted || phase != Phase.preparing) return;
+      setState(() => countdown--);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+    if (!mounted || phase != Phase.preparing) return;
+    setState(() {
       phase = Phase.playing;
       clock.start();
     });
@@ -402,7 +411,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       fit: BoxFit.contain,
       excludeFromSemantics: true,
     ),
-    title('첫 문제 준비 중', size: 22),
+    Semantics(
+      liveRegion: true,
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 160),
+        child: KeyedSubtree(
+          key: ValueKey(countdown),
+          child: title(
+            countdown == 0 ? '게임 시작!' : '$countdown',
+            size: 46,
+            color: blue,
+          ),
+        ),
+      ),
+    ),
   ]);
 
   Widget game() => LayoutBuilder(
