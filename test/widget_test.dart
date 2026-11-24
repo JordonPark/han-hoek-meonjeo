@@ -22,9 +22,8 @@ void main() {
   testWidgets(
     'starts an offline round with four options and skipping initially disabled',
     (tester) async {
-      await tester.binding.setSurfaceSize(const Size(390, 844));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
       tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
       tester.view.padding = const FakeViewPadding(right: 72);
       tester.view.viewPadding = const FakeViewPadding(right: 72);
       addTearDown(tester.view.reset);
@@ -54,6 +53,12 @@ void main() {
       final heading = find.text('토끼의 낙서장');
       expect(tester.widget<Text>(heading).maxLines, 1);
       expect(tester.getCenter(heading).dx, closeTo(195, 0.1));
+      tester.view.physicalSize = const Size(466, 678);
+      await tester.pump();
+      expect(tester.getSize(start).width, closeTo(362, 0.1));
+      expect(tester.getBottomLeft(start).dy, lessThan(678));
+      tester.view.physicalSize = const Size(390, 844);
+      await tester.pump();
       await tester.tap(start);
       await tester.pump();
       for (final label in ['3', '2', '1']) {
@@ -73,6 +78,23 @@ void main() {
         (widget) => widget is CustomPaint && widget.painter is StrokePainter,
       );
       expect(tester.getCenter(canvas).dx, closeTo(195, 0.1));
+      tester.view.physicalSize = const Size(669, 951);
+      await tester.pump();
+      expect(find.byKey(const ValueKey('wide-play-layout')), findsOneWidget);
+      expect(
+        tester.getTopRight(canvas).dx,
+        lessThan(tester.getTopLeft(find.byType(OutlinedButton).first).dx),
+      );
+      expect(find.text('0점'), findsOneWidget);
+      expect(tester.getBottomLeft(skip).dy, lessThan(951));
+      tester.view.physicalSize = const Size(466, 678);
+      await tester.pump();
+      expect(find.byKey(const ValueKey('wide-play-layout')), findsNothing);
+      expect(
+        tester.getBottomLeft(canvas).dy,
+        lessThan(tester.getTopLeft(find.byType(OutlinedButton).first).dy),
+      );
+      expect(find.text('0점'), findsOneWidget);
       final dynamic game = tester.state(find.byType(GameScreen));
       final options = game.options as List<String>;
       final answer = (game.prompt as Prompt).label;

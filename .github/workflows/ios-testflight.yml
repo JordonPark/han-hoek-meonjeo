@@ -26,6 +26,8 @@ jobs:
 
       - name: Archive the iOS app
         run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
           flutter pub get --enforce-lockfile
           flutter build ipa --release --no-codesign --no-pub --build-name=1.0.0 --build-number="$GITHUB_RUN_NUMBER"
           test -f build/ios/archive/Runner.xcarchive/Info.plist

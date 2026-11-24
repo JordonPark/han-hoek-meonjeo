@@ -353,13 +353,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final insets = MediaQuery.viewPaddingOf(context);
-    final sideInset = max(insets.left, insets.right);
+    final window = MediaQuery.sizeOf(context);
+    final sideInset = window.aspectRatio < 0.60
+        ? max(insets.left, insets.right)
+        : 0.0;
     return Scaffold(
       body: SafeArea(
         minimum: EdgeInsets.symmetric(horizontal: sideInset),
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 540),
+            constraints: BoxConstraints(
+              maxWidth: phase == Phase.playing ? 920 : 560,
+            ),
             child: switch (phase) {
               Phase.home => home(),
               Phase.preparing => prepare(),
@@ -513,10 +518,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Widget game() => LayoutBuilder(
     builder: (context, constraints) {
-      final canvasSize = min(
-        max(0.0, constraints.maxWidth - 2 * screenGutter(constraints.maxWidth)),
-        max(130.0, constraints.maxHeight - 335),
+      final contentWidth = max(
+        0.0,
+        constraints.maxWidth - 2 * screenGutter(constraints.maxWidth),
       );
+      final sideBySide = contentWidth >= 480;
+      final canvasSize = sideBySide
+          ? min(
+              (contentWidth - 20) * 0.60,
+              max(150.0, constraints.maxHeight - 140),
+            )
+          : min(contentWidth, max(130.0, constraints.maxHeight - 335));
       final progress = strokeProgressAt(
         elapsedMs: elapsed,
         questionStartedMs: questionAt,
@@ -524,43 +536,49 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       );
       final timer =
           '${(seconds ~/ 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
-      return spacedPage([
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Expanded(
-              flex: 2,
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: title(
-                  timer,
-                  size: 35,
-                  color: seconds <= 10 ? Colors.red.shade800 : ink,
-                ),
+      final header = Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            flex: 2,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: title(
+                timer,
+                size: 35,
+                color: seconds <= 10 ? Colors.red.shade800 : ink,
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerRight,
-                child: title('$score점', size: 27),
-              ),
-            ),
-          ],
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Center(
-            child: SizedBox.square(
-              dimension: canvasSize,
-              child: sketch(drawing, progress, true),
             ),
           ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerRight,
+              child: title('$score점', size: 27),
+            ),
+          ),
+        ],
+      );
+      final canvas = Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Center(
+          child: SizedBox.square(
+            dimension: canvasSize,
+            child: sketch(drawing, progress, true),
+          ),
         ),
-        Column(
-          children: [
+      );
+      final answers = Column(
+        children: [
+          if (sideBySide)
+            for (final option in options)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: SizedBox(width: double.infinity, child: choice(option)),
+              )
+          else
             for (var row = 0; row < 2; row++) ...[
               Row(
                 children: [
@@ -572,23 +590,38 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               ),
               const SizedBox(height: 10),
             ],
-            Semantics(
-              liveRegion: true,
-              child: SizedBox(
-                height: 26,
-                child: elapsed < lockedUntil
-                    ? title('틀렸어요', size: 18, color: const Color(0xffa33830))
-                    : null,
-              ),
-            ),
-            TextButton(
-              onPressed: questionAge >= 2000 && advanceAfterWrongAt == null
-                  ? skip
+          Semantics(
+            liveRegion: true,
+            child: SizedBox(
+              height: 26,
+              child: elapsed < lockedUntil
+                  ? title('틀렸어요', size: 18, color: const Color(0xffa33830))
                   : null,
-              child: const Text('건너뛰기', style: TextStyle(fontSize: 17)),
             ),
-          ],
-        ),
+          ),
+          TextButton(
+            onPressed: questionAge >= 2000 && advanceAfterWrongAt == null
+                ? skip
+                : null,
+            child: const Text('건너뛰기', style: TextStyle(fontSize: 17)),
+          ),
+        ],
+      );
+      return spacedPage([
+        header,
+        if (sideBySide)
+          Row(
+            key: const ValueKey('wide-play-layout'),
+            children: [
+              Expanded(flex: 3, child: canvas),
+              const SizedBox(width: 20),
+              Expanded(flex: 2, child: answers),
+            ],
+          )
+        else ...[
+          canvas,
+          answers,
+        ],
       ]);
     },
   );

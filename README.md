@@ -10,6 +10,7 @@ flutter run
 ```
 
 - Android와 iOS용 Flutter 프로젝트다. 홈, 첫 문제 준비, 60초 게임, 결과 복기를 구현했다.
+- iPhone Duo에서 접힘 상태에 따라 레이아웃을 다시 계산한다. 접힌 화면은 옆 시스템 영역을 피하고, 펼친 화면에 충분한 폭이 생기면 그림판과 답안을 나란히 배치한다. 전환 중에도 현재 문제와 타이머는 이어진다.
 - 현재 구현은 오프라인에서 345개 카테고리의 미리 저장된 획을 재생한다. 그림은 Google Quick, Draw! 샘플을 골라 한국어 라벨과 함께 재포장했다. 전체 그림과 보기의 사람이 하는 검수는 남아 있다. [데이터 출처](https://github.com/googlecreativelab/quickdraw-dataset) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
 - 아래 첫 실행 다운로드 시안은 SketchFlow 통합을 위한 설계다. 공개 체크포인트는 데스크톱 PyTorch용이고, 모바일 변환 결과와 실기기 검증이 준비되면 모델 다운로드와 기기 내 새 획 생성을 연결한다.
 - 홈과 결과의 배너는 Android 및 iOS 공식 AdMob 테스트 ID를 사용한다. 출시 빌드에는 계정의 실제 앱 및 배너 ID, 광고 동의 흐름과 스토어 개인정보 설정이 필요하다. 현재 테스트 배너는 게임을 가리지 않으며, 오프라인에서 광고가 실패해도 플레이할 수 있다. [AdMob Flutter 가이드](https://developers.google.com/admob/flutter/quick-start)
