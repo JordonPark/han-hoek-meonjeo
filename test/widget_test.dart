@@ -69,6 +69,20 @@ void main() {
         (widget) => widget is CustomPaint && widget.painter is StrokePainter,
       );
       expect(tester.getCenter(canvas).dx, closeTo(195, 0.1));
+      final dynamic game = tester.state(find.byType(GameScreen));
+      final options = game.options as List<String>;
+      final answer = (game.prompt as Prompt).label;
+      final wrong = options.firstWhere((option) => option != answer);
+      await tester.tap(find.widgetWithText(OutlinedButton, wrong));
+      await tester.pump();
+      expect(find.text('틀렸어요'), findsOneWidget);
+      expect(find.text('✕ $wrong'), findsOneWidget);
+      expect(
+        tester
+            .widgetList<OutlinedButton>(find.byType(OutlinedButton))
+            .every((button) => button.onPressed == null),
+        isTrue,
+      );
       await tester.pumpWidget(const SizedBox());
     },
   );

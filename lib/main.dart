@@ -26,6 +26,10 @@ double strokeProgressAt({
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  LicenseRegistry.addLicense(() async* {
+    final license = await rootBundle.loadString('assets/fonts/Gaegu-OFL.txt');
+    yield LicenseEntryWithLineBreaks(['Gaegu'], license);
+  });
   runApp(const Sketchbook());
 }
 
@@ -120,6 +124,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int level = 1;
   int questionAt = 0;
   int lockedUntil = 0;
+  int? advanceAfterWrongAt;
   int countdown = 3;
   bool loading = true;
 
@@ -219,7 +224,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (elapsed >= 60000) {
       finish();
     } else {
-      setState(() {});
+      setState(() {
+        final advanceAt = advanceAfterWrongAt;
+        if (advanceAt != null && elapsed >= advanceAt) {
+          missed.add((prompt!.label, drawing));
+          nextQuestion(skipped: true);
+        }
+      });
     }
   }
 
@@ -270,6 +281,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     disabled.clear();
     questionAt = elapsed;
     lockedUntil = 0;
+    advanceAfterWrongAt = null;
   }
 
   bool confusable(String answer, String candidate) => const [
@@ -291,11 +303,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         score++;
         nextQuestion(skipped: false);
       } else {
+        unawaited(HapticFeedback.mediumImpact());
         disabled.add(option);
         lockedUntil = elapsed + 1500;
         if (disabled.length == 3) {
-          missed.add((prompt!.label, drawing));
-          nextQuestion(skipped: true);
+          advanceAfterWrongAt = elapsed + 350;
         }
       }
     });
@@ -307,7 +319,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       finish();
       return;
     }
-    if (questionAge < 2000) return;
+    if (questionAge < 2000 || advanceAfterWrongAt != null) return;
     setState(() {
       missed.add((prompt!.label, drawing));
       nextQuestion(skipped: true);
@@ -360,10 +372,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget title(String label, {double size = 35, Color color = ink}) => Text(
+  Widget title(
+    String label, {
+    double size = 36,
+    Color color = ink,
+    bool handwritten = false,
+  }) => Text(
     label,
     textAlign: TextAlign.center,
-    style: TextStyle(fontSize: size, fontWeight: FontWeight.w900, color: color),
+    style: TextStyle(
+      fontFamily: handwritten ? 'Gaegu' : null,
+      fontSize: size,
+      fontWeight: handwritten ? FontWeight.w700 : FontWeight.w800,
+      color: color,
+    ),
   );
 
   Widget primary(String label, VoidCallback? action) => SizedBox(
@@ -373,7 +395,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         backgroundColor: blue,
         foregroundColor: Colors.white,
         minimumSize: const Size(0, 55),
-        textStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+        textStyle: const TextStyle(fontSize: 23, fontWeight: FontWeight.w800),
       ),
       onPressed: action,
       child: Text(label),
@@ -400,9 +422,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   Widget home() => spacedPage([
     Column(
       children: [
-        title('토끼의 낙서장'),
+        title('토끼의 낙서장', size: 44, handwritten: true),
         const SizedBox(height: 10),
-        title('60초 동안 그림을 맞혀요', size: 19),
+        title('60초 동안 그림을 맞혀요', size: 21),
       ],
     ),
     Padding(
@@ -452,7 +474,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   ]);
 
   Widget prepare() => spacedPage([
-    title('토끼의 낙서장'),
+    title('토끼의 낙서장', size: 44, handwritten: true),
     Image.asset(
       'assets/open-rabbit.png',
       height: (MediaQuery.sizeOf(context).height * 0.35)
@@ -481,7 +503,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     builder: (context, constraints) {
       final canvasSize = min(
         max(0.0, constraints.maxWidth - 40),
-        max(130.0, constraints.maxHeight - 295),
+        max(130.0, constraints.maxHeight - 335),
       );
       final progress = strokeProgressAt(
         elapsedMs: elapsed,
@@ -494,12 +516,26 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            title(
-              timer,
-              size: 30,
-              color: seconds <= 10 ? Colors.red.shade800 : ink,
+            Expanded(
+              flex: 2,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: title(
+                  timer,
+                  size: 35,
+                  color: seconds <= 10 ? Colors.red.shade800 : ink,
+                ),
+              ),
             ),
-            title('$score점', size: 24),
+            const SizedBox(width: 12),
+            Expanded(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerRight,
+                child: title('$score점', size: 27),
+              ),
+            ),
           ],
         ),
         Padding(
@@ -524,9 +560,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               ),
               const SizedBox(height: 10),
             ],
+            Semantics(
+              liveRegion: true,
+              child: SizedBox(
+                height: 26,
+                child: elapsed < lockedUntil
+                    ? title('틀렸어요', size: 18, color: const Color(0xffa33830))
+                    : null,
+              ),
+            ),
             TextButton(
-              onPressed: questionAge >= 2000 ? skip : null,
-              child: const Text('건너뛰기'),
+              onPressed: questionAge >= 2000 && advanceAfterWrongAt == null
+                  ? skip
+                  : null,
+              child: const Text('건너뛰기', style: TextStyle(fontSize: 17)),
             ),
           ],
         ),
@@ -536,24 +583,39 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Widget choice(String option) {
     final wrong = disabled.contains(option);
-    return OutlinedButton(
+    final button = OutlinedButton(
       onPressed: wrong || elapsed < lockedUntil ? null : () => answer(option),
       style: OutlinedButton.styleFrom(
-        minimumSize: const Size(0, 54),
-        textStyle: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+        minimumSize: const Size(0, 58),
+        textStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
         foregroundColor: ink,
-        side: BorderSide(color: wrong ? Colors.red.shade700 : ink),
+        disabledForegroundColor: wrong
+            ? const Color(0xffa33830)
+            : const Color(0xff62564c),
+        disabledBackgroundColor: wrong ? const Color(0xffffe1dc) : null,
+        side: BorderSide(color: wrong ? const Color(0xffa33830) : ink),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
       ),
       child: Text(wrong ? '✕ $option' : option, textAlign: TextAlign.center),
+    );
+    if (!wrong || MediaQuery.disableAnimationsOf(context)) return button;
+    return TweenAnimationBuilder<double>(
+      key: ValueKey(option),
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 320),
+      child: button,
+      builder: (context, progress, child) => Transform.translate(
+        offset: Offset(sin(progress * 6 * pi) * (1 - progress) * 8, 0),
+        child: child,
+      ),
     );
   }
 
   Widget results() => spacedPage([
     Column(
       children: [
-        title('시간 종료', size: 27),
+        title('시간 종료', size: 34, handwritten: true),
         title('$score개 정답', size: 49, color: blue),
         title('최고 기록 $best개', size: 17),
       ],
