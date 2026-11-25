@@ -943,6 +943,20 @@ void main() {
       expect(tester.widget<Text>(find.text('홈으로')).maxLines, 1);
       expect(tester.getSize(replay).height, tester.getSize(home).height);
       expect(tester.getCenter(replay).dy, tester.getCenter(home).dy);
+      tester.view.physicalSize = const Size(780, 360);
+      tester.view.padding = const FakeViewPadding(right: 54, bottom: 18);
+      tester.view.viewPadding = const FakeViewPadding(right: 54, bottom: 18);
+      await tester.pump();
+      expect(find.byKey(const ValueKey('wide-result-layout')), findsOneWidget);
+      expect(
+        tester.getCenter(find.text('3개 정답')).dx,
+        lessThan(tester.getCenter(find.text('놓친 그림')).dx),
+      );
+      expect(
+        tester.getBottomLeft(find.text(reviewed.label)).dy,
+        lessThan(tester.getTopLeft(replay).dy),
+      );
+      expect(tester.getSize(replay).height, tester.getSize(home).height);
       tester.view.physicalSize = const Size(320, 568);
       tester.view.padding = const FakeViewPadding(bottom: 24);
       tester.view.viewPadding = const FakeViewPadding(bottom: 24);

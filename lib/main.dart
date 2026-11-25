@@ -2098,9 +2098,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget resultSummary() => Column(
+  Widget resultSummary({bool compact = false}) => Column(
     children: [
-      title('시간 종료', size: 34, handwritten: true),
+      title('시간 종료', size: compact ? 28 : 34, handwritten: true),
       const SizedBox(
         width: 122,
         height: 13,
@@ -2111,58 +2111,72 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         painter: ScoreBrush(),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-          child: title('$score개 정답', size: 49, color: blue),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: title(
+              '$score개 정답',
+              size: compact ? 42 : 49,
+              color: blue,
+              singleLine: true,
+            ),
+          ),
         ),
       ),
       title('최고 기록 $best개', size: 17),
     ],
   );
 
-  Widget missedDrawings(double availableWidth) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 20),
-    child: Column(
-      children: [
-        title('놓친 그림', size: 20),
-        const Text('그림을 눌러 다시 맞혀 보세요', style: TextStyle(fontSize: 13)),
-        const SizedBox(height: 8),
-        Center(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              spacing: 12,
-              children: [
-                for (final (label, strokes) in missed)
-                  SizedBox(
-                    width: min(availableWidth, missed.length == 1 ? 216 : 152),
-                    child: Semantics(
-                      button: true,
-                      label: '$label 다시 맞히기',
-                      onTap: () => reviewQuestion(label, strokes),
-                      excludeSemantics: true,
-                      child: InkWell(
-                        onTap: () => reviewQuestion(label, strokes),
-                        borderRadius: BorderRadius.circular(20),
-                        child: Column(
-                          children: [
-                            AspectRatio(
-                              aspectRatio: 1,
-                              child: sketch(strokes, 1, false),
+  Widget missedDrawings(double availableWidth, {double? compactCardSize}) =>
+      Padding(
+        padding: EdgeInsets.symmetric(
+          vertical: compactCardSize == null ? 20 : 0,
+        ),
+        child: Column(
+          children: [
+            title('놓친 그림', size: 20),
+            const Text('그림을 눌러 다시 맞혀 보세요', style: TextStyle(fontSize: 13)),
+            const SizedBox(height: 8),
+            Center(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  spacing: 12,
+                  children: [
+                    for (final (label, strokes) in missed)
+                      SizedBox(
+                        width: min(
+                          availableWidth,
+                          compactCardSize ?? (missed.length == 1 ? 216 : 152),
+                        ),
+                        child: Semantics(
+                          button: true,
+                          label: '$label 다시 맞히기',
+                          onTap: () => reviewQuestion(label, strokes),
+                          excludeSemantics: true,
+                          child: InkWell(
+                            onTap: () => reviewQuestion(label, strokes),
+                            borderRadius: BorderRadius.circular(20),
+                            child: Column(
+                              children: [
+                                AspectRatio(
+                                  aspectRatio: 1,
+                                  child: sketch(strokes, 1, false),
+                                ),
+                                const SizedBox(height: 6),
+                                title(label, size: 15),
+                              ],
                             ),
-                            const SizedBox(height: 6),
-                            title(label, size: 15),
-                          ],
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-              ],
+                  ],
+                ),
+              ),
             ),
-          ),
+          ],
         ),
-      ],
-    ),
-  );
+      );
 
   Widget results() => LayoutBuilder(
     builder: (context, constraints) {
@@ -2171,18 +2185,58 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         55.0,
         90.0,
       );
+      final compact =
+          missed.isNotEmpty &&
+          constraints.maxWidth >= 460 &&
+          constraints.maxHeight <= 440;
       return Column(
         children: [
           Expanded(
-            child: spacedPage(
-              [
-                resultSummary(),
-                if (missed.isNotEmpty)
-                  missedDrawings(max(0, constraints.maxWidth - 2 * gutter)),
-              ],
-              distribution: MainAxisAlignment.spaceEvenly,
-              verticalGutter: 12,
-            ),
+            child: compact
+                ? LayoutBuilder(
+                    builder: (context, area) {
+                      final width = max(
+                        0.0,
+                        (area.maxWidth - 2 * gutter - 16) / 2,
+                      );
+                      final overhead =
+                          MediaQuery.textScalerOf(context).scale(48) + 38;
+                      final card = (area.maxHeight - overhead).clamp(
+                        72.0,
+                        156.0,
+                      );
+                      return spacedPage(
+                        [
+                          Row(
+                            key: const ValueKey('wide-result-layout'),
+                            children: [
+                              Expanded(child: resultSummary(compact: true)),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: missedDrawings(
+                                  width,
+                                  compactCardSize: card,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                        distribution: MainAxisAlignment.center,
+                        verticalGutter: 8,
+                      );
+                    },
+                  )
+                : spacedPage(
+                    [
+                      resultSummary(),
+                      if (missed.isNotEmpty)
+                        missedDrawings(
+                          max(0, constraints.maxWidth - 2 * gutter),
+                        ),
+                    ],
+                    distribution: MainAxisAlignment.spaceEvenly,
+                    verticalGutter: 12,
+                  ),
           ),
           Padding(
             padding: EdgeInsets.fromLTRB(gutter, 8, gutter, 12),
