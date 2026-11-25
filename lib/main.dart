@@ -2754,13 +2754,16 @@ class _AdBannerState extends State<AdBanner> {
     try {
       await initializeAds();
       if (!mounted) return;
-      const android = 'ca-app-pub-3940256099942544/6300978111';
-      const ios = 'ca-app-pub-3940256099942544/2934735716';
+      const androidTestBanner = 'ca-app-pub-3940256099942544/6300978111';
+      const iosTestBanner = 'ca-app-pub-3940256099942544/2934735716';
+      const iosLiveBanner = 'ca-app-pub-8415150751807139/2535984134';
+      const useLiveIosBanner =
+          kReleaseMode && !bool.fromEnvironment('ADMOB_TEST_ADS');
       banner = BannerAd(
         size: AdSize.banner,
         adUnitId: defaultTargetPlatform == TargetPlatform.android
-            ? android
-            : ios,
+            ? androidTestBanner
+            : (useLiveIosBanner ? iosLiveBanner : iosTestBanner),
         request: const AdRequest(nonPersonalizedAds: true),
         listener: BannerAdListener(
           onAdLoaded: (_) {

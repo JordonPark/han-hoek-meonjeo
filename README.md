@@ -15,7 +15,7 @@ flutter run
 - iPhone Duo에서 접힘 상태에 따라 레이아웃을 다시 계산한다. 접힌 화면은 옆 시스템 영역을 피하고, 펼친 화면에 충분한 폭이 생기면 그림판과 답안을 나란히 배치한다. 전환 중에도 현재 문제와 타이머는 이어진다.
 - 현재 구현은 오프라인에서 345개 카테고리의 미리 저장된 획을 재생한다. 그림은 Google Quick, Draw! 샘플을 골라 한국어 라벨과 함께 재포장했다. 전체 그림과 보기의 사람이 하는 검수는 남아 있다. [데이터 출처](https://github.com/googlecreativelab/quickdraw-dataset) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
 - Android와 iOS 16 이상에서 첫 실행의 `스케치북 준비하기` 화면에서 약 126 MB의 SketchFlow 팩을 받거나 기본 그림으로 바로 시작할 수 있다. 기본 그림을 선택한 이후에는 앱을 다시 열면 홈으로 이동하고, 홈에서 AI 그림을 받을 수 있다. 일시정지하거나 앱을 다시 열어도 받은 부분부터 이어받는다. 설치된 팩은 다음 실행에서 자동으로 열리며 오프라인에서도 사용할 수 있다. 첫 두 문제는 저장된 그림으로 시작하고, 두 번째 문제를 푸는 동안 다음 AI 그림을 생성한다. 게임 화면에 각 그림의 출처를 표시한다.
-- iOS는 등록된 AdMob 앱 ID를 사용한다. 홈과 결과는 Android와 iOS 모두 공식 테스트 배너 광고 단위를 요청한다. 출시 검토 시 실제 배너 광고 단위, 광고 동의 흐름과 스토어 개인정보 설정을 확인한다. 광고가 실패해도 오프라인에서 플레이할 수 있다. [AdMob Flutter 가이드](https://developers.google.com/admob/flutter/quick-start)
+- 홈과 결과에 AdMob 배너가 표시된다. iOS App Store용 릴리스 빌드는 등록된 실제 배너 광고 단위를 사용한다. 내부 TestFlight 워크플로는 `ADMOB_TEST_ADS=true`를 지정하며, 개발 빌드와 현재 Android 빌드도 공식 테스트 배너를 사용한다. 광고가 실패해도 오프라인에서 플레이할 수 있다. [AdMob Flutter 가이드](https://developers.google.com/admob/flutter/quick-start)
 
 ### SketchFlow 모델 팩
 

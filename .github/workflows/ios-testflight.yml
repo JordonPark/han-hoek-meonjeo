@@ -1,7 +1,15 @@
-name: Rabbit Sketchbook TestFlight
+name: Rabbit Sketchbook iOS Distribution
 
 on:
   workflow_dispatch:
+    inputs:
+      distribution:
+        description: Upload destination
+        type: choice
+        options:
+          - testflight
+          - app-store
+        default: testflight
 
 permissions:
   contents: read
@@ -14,6 +22,8 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: xcode-27
     timeout-minutes: 25
+    env:
+      DISTRIBUTION: ${{ inputs.distribution }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -29,10 +39,14 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
           flutter pub get --enforce-lockfile
-          flutter build ipa --release --no-codesign --no-pub --build-name=1.0.0 --build-number="$GITHUB_RUN_NUMBER"
+          test_ads=true
+          if [[ "$DISTRIBUTION" == app-store ]]; then
+            test_ads=false
+          fi
+          flutter build ipa --release --no-codesign --no-pub --build-name=1.0.0 --build-number="$GITHUB_RUN_NUMBER" --dart-define="ADMOB_TEST_ADS=$test_ads"
           test -f build/ios/archive/Runner.xcarchive/Info.plist
 
-      - name: Sign and upload for internal TestFlight
+      - name: Sign and upload to App Store Connect
         env:
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           ASC_KEY_ID: ${{ vars.ASC_KEY_ID }}
@@ -70,7 +84,9 @@ jobs:
           plutil -insert signingStyle -string automatic "$options"
           plutil -insert teamID -string "$APPLE_TEAM_ID" "$options"
           plutil -insert manageAppVersionAndBuildNumber -bool NO "$options"
-          plutil -insert testFlightInternalTestingOnly -bool YES "$options"
+          if [[ "$DISTRIBUTION" != app-store ]]; then
+            plutil -insert testFlightInternalTestingOnly -bool YES "$options"
+          fi
 
           xcodebuild -exportArchive -archivePath "$archive" \
             -exportPath "$scratch/export" -exportOptionsPlist "$options" \
