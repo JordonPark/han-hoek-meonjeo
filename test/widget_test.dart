@@ -86,13 +86,27 @@ void main() {
     }
 
     await expectHeading('스케치북 준비하기');
+    expect(find.widgetWithText(FilledButton, 'AI 그림 다운로드'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, '기본 그림으로 시작'), findsOneWidget);
+    final music = find.widgetWithText(FilterChip, '음악');
+    await tester.ensureVisible(music);
+    await tester.tap(music);
+    await tester.pump();
+    expect(tester.widget<FilterChip>(music).selected, isFalse);
+    expect(
+      (await SharedPreferences.getInstance()).getBool('game_music'),
+      isFalse,
+    );
     game.setState(() => game.openingSketchFlow = true);
     await expectHeading('스케치북을 준비 중이에요');
+    expect(music, findsNothing);
     game.setState(() {
       game.openingSketchFlow = false;
       game.sketchFlow = _LoadedSketchFlow();
     });
     await expectHeading('스케치북 준비 완료!');
+    expect(find.widgetWithText(FilledButton, 'AI 그림으로 시작'), findsOneWidget);
+    expect(tester.widget<FilterChip>(music).selected, isFalse);
     await tester.pumpWidget(const SizedBox());
   });
 

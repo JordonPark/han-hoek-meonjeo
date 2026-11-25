@@ -938,6 +938,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final complete = sketchFlow != null;
     final progress = modelPercent;
     final transferring = modelTransfer != null;
+    final firstSetup = !sketchFlowSetupSeen;
+    final showAudioSettings = firstSetup && !openingSketchFlow;
     return spacedPage([
       appTitle(),
       Column(
@@ -958,7 +960,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           ),
           if (!openingSketchFlow && !complete)
             const Text(
-              '한 번 받으면 인터넷 없이 AI가 새 그림을 그려요.',
+              'AI가 제시어에 맞춰 새 그림을 그려요.\n한 번 받으면 인터넷 없이 플레이할 수 있어요.',
               textAlign: TextAlign.center,
             ),
         ],
@@ -967,13 +969,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         child: DownloadRabbit(
           packing: transferring,
           packed: complete || progress != null,
-          size: (MediaQuery.sizeOf(context).height * 0.38)
-              .clamp(160, 310)
-              .toDouble(),
+          size:
+              (MediaQuery.sizeOf(context).height *
+                      (showAudioSettings ? 0.30 : 0.38))
+                  .clamp(145, showAudioSettings ? 255 : 310)
+                  .toDouble(),
         ),
       ),
       Column(
         children: [
+          if (showAudioSettings) ...[
+            audioSettings(),
+            const SizedBox(height: 8),
+          ],
           if (openingSketchFlow || progress != null || complete) ...[
             LinearProgressIndicator(
               value: complete
@@ -995,7 +1003,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           if (modelStatus != null)
             Text(modelStatus!, textAlign: TextAlign.center),
           if (complete)
-            primary('시작', loading || error != null ? null : start)
+            primary(
+              firstSetup ? 'AI 그림으로 시작' : '시작',
+              loading || error != null ? null : start,
+            )
           else if (openingSketchFlow)
             if (transferring)
               secondary(
@@ -1082,26 +1093,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       padding: const EdgeInsets.only(top: 12),
       child: Column(
         children: [
-          Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 8,
-            children: [
-              FilterChip(
-                label: const Text('음악'),
-                selected: audio.musicEnabled,
-                onSelected: (music) => unawaited(
-                  setAudioSettings(music: music, effects: audio.effectsEnabled),
-                ),
-              ),
-              FilterChip(
-                label: const Text('효과음'),
-                selected: audio.effectsEnabled,
-                onSelected: (effects) => unawaited(
-                  setAudioSettings(music: audio.musicEnabled, effects: effects),
-                ),
-              ),
-            ],
-          ),
+          audioSettings(),
           TextButton(
             onPressed: () => showAboutDialog(
               context: context,
@@ -1130,6 +1122,27 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       ),
     ),
   ], distribution: MainAxisAlignment.spaceEvenly);
+
+  Widget audioSettings() => Wrap(
+    alignment: WrapAlignment.center,
+    spacing: 8,
+    children: [
+      FilterChip(
+        label: const Text('음악'),
+        selected: audio.musicEnabled,
+        onSelected: (music) => unawaited(
+          setAudioSettings(music: music, effects: audio.effectsEnabled),
+        ),
+      ),
+      FilterChip(
+        label: const Text('효과음'),
+        selected: audio.effectsEnabled,
+        onSelected: (effects) => unawaited(
+          setAudioSettings(music: audio.musicEnabled, effects: effects),
+        ),
+      ),
+    ],
+  );
 
   void showBalanceDetails() {
     final history = balanceHistory;
