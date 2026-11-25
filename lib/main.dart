@@ -24,6 +24,13 @@ const skipWaitMs = 2000;
 const firstWrongLockMs = 800;
 const repeatWrongLockMs = 1500;
 const lastWrongTransitionMs = 350;
+const gameStartCueDuration = Duration(milliseconds: 450);
+const answerLabelSize = 25.0;
+const answerLabelStyle = TextStyle(
+  fontFamily: 'Gaegu',
+  fontSize: answerLabelSize,
+  fontWeight: FontWeight.w700,
+);
 final quizPlaytestSeed = int.tryParse(
   const String.fromEnvironment('QUIZ_PLAYTEST_SEED'),
 );
@@ -501,7 +508,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       setState(() => countdown--);
     }
     audio.play(GameSound.start);
-    await Future<void>.delayed(const Duration(milliseconds: 450));
+    await Future<void>.delayed(gameStartCueDuration);
     if (!mounted || phase != Phase.preparing) return;
     setState(() {
       phase = Phase.playing;
@@ -1209,15 +1216,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             : const Duration(milliseconds: 160),
         child: KeyedSubtree(
           key: ValueKey(preparingDrawing ? -1 : countdown),
-          child: title(
-            preparingDrawing
-                ? '첫 그림 그리는 중'
-                : countdown == 0
-                ? '게임 시작!'
-                : '$countdown',
-            size: preparingDrawing ? 28 : 46,
-            color: blue,
-          ),
+          child: !preparingDrawing && countdown == 0
+              ? gameStartCue(MediaQuery.disableAnimationsOf(context))
+              : title(
+                  preparingDrawing ? '첫 그림 그리는 중' : '$countdown',
+                  size: preparingDrawing ? 28 : 46,
+                  color: blue,
+                ),
         ),
       ),
     ),
@@ -1225,12 +1230,45 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       const Text('준비가 오래 걸리면 기본 그림으로 시작해요.', textAlign: TextAlign.center),
   ]);
 
+  Widget gameStartCue(bool reducedMotion) {
+    final label = title(
+      '게임 시작!',
+      size: 54,
+      color: blue,
+      handwritten: true,
+      singleLine: true,
+    );
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: reducedMotion
+            ? label
+            : TweenAnimationBuilder<double>(
+                key: const ValueKey('game-start-shake'),
+                tween: Tween(begin: 0, end: 1),
+                duration: const Duration(milliseconds: 400),
+                child: label,
+                builder: (context, progress, child) {
+                  final swing = sin(progress * 6 * pi) * (1 - progress);
+                  return Transform.translate(
+                    offset: Offset(9 * swing, 0),
+                    child: Transform.rotate(angle: 0.04 * swing, child: child),
+                  );
+                },
+              ),
+      ),
+    );
+  }
+
   Widget game() => LayoutBuilder(
     builder: (context, constraints) {
       final gutter = constraints.maxWidth < 320 ? 4.0 : 12.0;
       final contentWidth = max(0.0, constraints.maxWidth - 2 * gutter);
       final sideBySide = contentWidth >= 420;
-      final largeText = MediaQuery.textScalerOf(context).scale(20) >= 32;
+      final largeText =
+          MediaQuery.textScalerOf(context).scale(answerLabelSize) >=
+          answerLabelSize * 1.6;
       final singleColumn = sideBySide || (largeText && contentWidth < 360);
       final canvasSize = sideBySide
           ? min(
@@ -1571,7 +1609,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       onPressed: wrong || locked ? null : () => answer(option),
       style: OutlinedButton.styleFrom(
         minimumSize: const Size(0, 58),
-        textStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+        textStyle: answerLabelStyle,
         foregroundColor: ink,
         backgroundColor: canRetry
             ? const Color(0xfff3f5ff)
@@ -1663,6 +1701,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 replay,
                 for (final option in reviewOptions)
                   OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      textStyle: answerLabelStyle,
+                    ),
                     onPressed: solved || attempts.contains(option)
                         ? null
                         : () => update(() {

@@ -246,9 +246,26 @@ void main() {
         expect(find.text('01:00'), findsNothing);
         await tester.pump(const Duration(seconds: 1));
       }
-      expect(find.text('게임 시작!'), findsOneWidget);
+      final startCue = find.text('게임 시작!');
+      expect(startCue, findsOneWidget);
+      expect(tester.widget<Text>(startCue).style?.fontFamily, 'Gaegu');
       expect(find.text('01:00'), findsNothing);
-      await tester.pump(const Duration(milliseconds: 450));
+      final initialCueX = tester.getCenter(startCue).dx;
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(tester.getCenter(startCue).dx, isNot(closeTo(initialCueX, 0.1)));
+      tester.platformDispatcher.accessibilityFeaturesTestValue =
+          const FakeAccessibilityFeatures(disableAnimations: true);
+      addTearDown(
+        tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
+      );
+      await tester.pump();
+      expect(find.byKey(const ValueKey('game-start-shake')), findsNothing);
+      expect(startCue, findsOneWidget);
+      await tester.pump(
+        gameStartCueDuration - const Duration(milliseconds: 60),
+      );
+      tester.platformDispatcher.clearAccessibilityFeaturesTestValue();
+      await tester.pump();
       final skip = find.byKey(const ValueKey('skip-question'));
       expect(find.text('01:00'), findsOneWidget);
       expect(find.byType(OutlinedButton), findsNWidgets(4));
@@ -272,6 +289,10 @@ void main() {
       await tester.pump();
       final longText = find.text(longOption);
       expect(tester.widget<Text>(longText).maxLines, 1);
+      final longChoice = tester.widget<OutlinedButton>(
+        find.widgetWithText(OutlinedButton, longOption),
+      );
+      expect(longChoice.style?.textStyle?.resolve({})?.fontFamily, 'Gaegu');
       expect(
         tester.getSize(find.widgetWithText(OutlinedButton, longOption)).height,
         greaterThanOrEqualTo(48),
@@ -435,7 +456,17 @@ void main() {
       await tester.tap(missedCard);
       await tester.pumpAndSettle();
       expect(find.text('다시 맞히기'), findsOneWidget);
-      await tester.tap(find.widgetWithText(OutlinedButton, reviewed.label));
+      final reviewChoice = find.widgetWithText(OutlinedButton, reviewed.label);
+      expect(
+        tester
+            .widget<OutlinedButton>(reviewChoice)
+            .style
+            ?.textStyle
+            ?.resolve({})
+            ?.fontFamily,
+        'Gaegu',
+      );
+      await tester.tap(reviewChoice);
       await tester.pump();
       expect(find.text('정답이에요!'), findsOneWidget);
       expect(game.score, 3);
