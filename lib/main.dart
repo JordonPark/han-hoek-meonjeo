@@ -1050,12 +1050,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       ],
     ),
     Padding(
-      padding: const EdgeInsets.symmetric(vertical: 20),
+      padding: const EdgeInsets.symmetric(vertical: 12),
       child: RabbitIdle(
         child: Image.asset(
           'assets/paper-rabbit.webp',
-          height: (MediaQuery.sizeOf(context).height * 0.37)
-              .clamp(170, 330)
+          height: (MediaQuery.sizeOf(context).height * 0.32)
+              .clamp(150, 300)
               .toDouble(),
           fit: BoxFit.contain,
           excludeFromSemantics: true,
@@ -1079,10 +1079,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       ],
     ),
     Padding(
-      padding: const EdgeInsets.only(top: 24),
+      padding: const EdgeInsets.only(top: 12),
       child: Column(
         children: [
-          const AdBanner(),
           Wrap(
             alignment: WrapAlignment.center,
             spacing: 8,
@@ -1126,6 +1125,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             ),
             child: const Text('앱 정보'),
           ),
+          const AdBanner(),
         ],
       ),
     ),
