@@ -249,10 +249,22 @@ void main() {
       expect(find.text('게임 시작!'), findsOneWidget);
       expect(find.text('01:00'), findsNothing);
       await tester.pump(const Duration(milliseconds: 450));
-      final skip = find.widgetWithText(TextButton, '건너뛰기 · −3초');
+      final skip = find.byKey(const ValueKey('skip-question'));
       expect(find.text('01:00'), findsOneWidget);
       expect(find.byType(OutlinedButton), findsNWidgets(4));
       expect(tester.widget<TextButton>(skip).onPressed, isNull);
+      expect(
+        find.descendant(
+          of: skip,
+          matching: find.byIcon(Icons.lock_outline_rounded),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: skip, matching: find.text('−3초')),
+        findsOneWidget,
+      );
+      expect(tester.getSize(skip).height, greaterThanOrEqualTo(48));
       expect(tester.getBottomLeft(skip).dy, lessThan(844));
       final original = List<String>.of(game.options as List<String>);
       const longOption = '아주 긴 제시어가 들어간 보기';

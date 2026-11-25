@@ -1358,7 +1358,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   ],
                 ],
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: row == 0 ? 10 : 4),
             ],
           Semantics(
             liveRegion: true,
@@ -1393,16 +1393,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   : null,
             ),
           ),
-          Semantics(
-            hint: canSkip ? '남은 시간에서 3초를 차감합니다' : '그림이 완성되고 2초 뒤에 사용할 수 있습니다',
-            child: TextButton(
-              onPressed: canSkip ? skip : null,
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xff594b3e),
-              ),
-              child: const Text('건너뛰기 · −3초', style: TextStyle(fontSize: 14)),
-            ),
-          ),
+          skipButton(),
         ],
       );
       return spacedPage(
@@ -1428,6 +1419,69 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       );
     },
   );
+
+  Widget skipButton() {
+    final enabled = canSkip;
+    final foreground = enabled ? blue : const Color(0xff695947);
+    return Semantics(
+      hint: enabled ? '남은 시간에서 3초를 차감합니다' : '그림이 완성되고 2초 뒤에 사용할 수 있습니다',
+      child: TextButton(
+        key: const ValueKey('skip-question'),
+        onPressed: enabled ? skip : null,
+        style: TextButton.styleFrom(
+          foregroundColor: foreground,
+          disabledForegroundColor: foreground,
+          backgroundColor: const Color(0xfff4f5ff),
+          disabledBackgroundColor: const Color(0xfff5edde),
+          side: BorderSide(
+            color: enabled ? const Color(0xff8294ce) : const Color(0xffc5b295),
+          ),
+          shape: const StadiumBorder(),
+          minimumSize: const Size(0, 36),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          visualDensity: VisualDensity.standard,
+          tapTargetSize: MaterialTapTargetSize.padded,
+          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+        ),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                enabled ? Icons.skip_next_rounded : Icons.lock_outline_rounded,
+                size: 17,
+              ),
+              const SizedBox(width: 5),
+              const Text('건너뛰기'),
+              const SizedBox(width: 9),
+              DecoratedBox(
+                decoration: ShapeDecoration(
+                  color: enabled
+                      ? const Color(0xfff6e4df)
+                      : const Color(0xffeae0ce),
+                  shape: const StadiumBorder(),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 2,
+                  ),
+                  child: Text(
+                    '−3초',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: enabled ? const Color(0xff894539) : foreground,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget choice(String option) {
     final wrong = disabled.contains(option);
