@@ -200,6 +200,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   SketchFlow? sketchFlow;
   bool sketchFlowSetupSeen = false;
   bool openingSketchFlow = false;
+  bool modelDownloadPaused = false;
   SketchFlowTransfer? modelTransfer;
   bool aiRound = false;
   bool aiDrawing = false;
@@ -280,6 +281,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     setState(() {
       modelTransfer = transfer;
       openingSketchFlow = true;
+      modelDownloadPaused = false;
       modelStatus = null;
     });
     try {
@@ -298,10 +300,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       }
       setState(() => sketchFlow = model);
     } catch (_) {
-      if (mounted && !transfer.paused) {
-        setState(
-          () => modelStatus = 'AI 그림을 준비하지 못했어요. 다시 시도하거나 기본 그림으로 시작하세요.',
-        );
+      int? savedPercent;
+      try {
+        savedPercent = await SketchFlow.savedDownloadPercent();
+      } catch (_) {
+        // The download state can be shown without a cached percentage.
+      }
+      if (mounted) {
+        setState(() {
+          modelPercent = savedPercent;
+          if (!transfer.paused) {
+            modelStatus = 'AI 그림을 받지 못했어요. 연결을 확인하고 다시 시도해 주세요.';
+          }
+        });
       }
     } finally {
       if (mounted) {
@@ -1079,6 +1090,26 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final transferring = modelTransfer != null;
     final firstSetup = !sketchFlowSetupSeen;
     final showAudioSettings = firstSetup && !openingSketchFlow;
+    final verifying = openingSketchFlow && progress == 100;
+    final paused =
+        modelDownloadPaused ||
+        (!openingSketchFlow &&
+            progress != null &&
+            modelStatus == null &&
+            !complete);
+    final status = complete
+        ? 'AI 그림으로 플레이할 수 있어요'
+        : verifying
+        ? '다운로드 완료 · 모델 확인 중'
+        : openingSketchFlow
+        ? (modelDownloadPaused
+              ? '일시정지 중'
+              : '다운로드 중${progress == null ? '' : ' · $progress%'}')
+        : paused
+        ? '다운로드 일시정지${progress == null ? '' : ' · $progress%'}'
+        : modelStatus != null && progress != null
+        ? '현재 $progress% 받음'
+        : null;
     return spacedPage([
       appTitle(),
       Column(
@@ -1099,7 +1130,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           ),
           if (!openingSketchFlow && !complete)
             const Text(
-              'AI가 제시어에 맞춰 새 그림을 그려요.\n한 번 받으면 인터넷 없이 플레이할 수 있어요.',
+              '받은 뒤에는 인터넷 없이 AI 그림을 만들 수 있어요.',
               textAlign: TextAlign.center,
             ),
         ],
@@ -1132,11 +1163,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               borderRadius: BorderRadius.circular(10),
             ),
             const SizedBox(height: 8),
-            if (progress != null && !complete)
-              title(
-                progress == 100 && openingSketchFlow ? '모델 확인 중' : '$progress%',
-                size: 24,
-              ),
+          ],
+          if (status != null) ...[
+            Semantics(
+              liveRegion:
+                  !openingSketchFlow || verifying || modelDownloadPaused,
+              child: title(status, size: 17),
+            ),
             const SizedBox(height: 10),
           ],
           if (modelStatus != null)
@@ -1146,23 +1179,25 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               firstSetup ? 'AI 그림으로 시작' : '시작',
               loading || error != null ? null : start,
             )
-          else if (openingSketchFlow)
-            if (transferring)
+          else if (openingSketchFlow) ...[
+            if (transferring && !verifying)
               secondary(
                 '일시정지',
-                modelTransfer!.paused || progress == 100
+                modelDownloadPaused
                     ? null
-                    : () => setState(() => modelTransfer!.pause()),
-              )
-            else
-              const SizedBox(height: 48)
-          else ...[
-            Text('약 ${SketchFlow.downloadMegabytes} MB'),
+                    : () => setState(() {
+                        modelDownloadPaused = true;
+                        modelTransfer!.pause();
+                      }),
+              ),
+          ] else ...[
+            if (modelStatus != null) const SizedBox(height: 8),
+            Text('AI 그림 용량 약 ${SketchFlow.downloadMegabytes} MB'),
             const SizedBox(height: 8),
             primary(
               modelStatus != null
                   ? '다시 시도'
-                  : progress != null
+                  : paused
                   ? '이어받기'
                   : 'AI 그림 다운로드',
               enableModel,
@@ -1488,10 +1523,36 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       final gutter = constraints.maxWidth < 320 ? 4.0 : 12.0;
       final contentWidth = max(0.0, constraints.maxWidth - 2 * gutter);
       final sideBySide = contentWidth >= 420;
-      final largeText =
-          MediaQuery.textScalerOf(context).scale(answerLabelSize) >=
-          answerLabelSize * 1.6;
-      final singleColumn = sideBySide || (largeText && contentWidth < 360);
+      final textScaler = MediaQuery.textScalerOf(context);
+      final labelSize = textScaler.scale(answerLabelSize);
+      final largeText = labelSize >= answerLabelSize * 1.6;
+      final paneWidth = sideBySide ? (contentWidth - 20) * .4 : contentWidth;
+      bool answerNeedsFullWidth() {
+        // The button reserves 12 px for padding and 32 px for its answer mark.
+        final labelWidth = max(1.0, (paneWidth - 12) / 2 - 44);
+        return options.any((option) {
+          final text = TextPainter(
+            text: TextSpan(text: option, style: answerLabelStyle),
+            textDirection: Directionality.of(context),
+            textScaler: textScaler,
+            maxLines: 2,
+          )..layout(maxWidth: labelWidth);
+          final needsWidth = text.didExceedMaxLines;
+          text.dispose();
+          return needsWidth;
+        });
+      }
+
+      final compactWide =
+          sideBySide &&
+          constraints.maxHeight <= 440 &&
+          !largeText &&
+          !answerNeedsFullWidth();
+      final singleColumn =
+          (sideBySide && !compactWide) ||
+          (largeText && contentWidth < 360) ||
+          (!sideBySide && contentWidth < 330 && answerNeedsFullWidth());
+      final wrapOptions = compactWide || singleColumn || contentWidth < 330;
       final canvasSize = sideBySide
           ? min(
               (contentWidth - 20) * 0.60,
@@ -1628,6 +1689,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     option,
                     locked: answersLocked,
                     retryReady: retryReady,
+                    wrapLabel: wrapOptions,
                   ),
                 ),
               )
@@ -1642,6 +1704,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                         options[row * 2 + column],
                         locked: answersLocked,
                         retryReady: retryReady,
+                        wrapLabel: wrapOptions,
                       ),
                     ),
                   ],
@@ -1697,21 +1760,38 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           title('틀렸어요', size: 14, color: wrongColor),
           const SizedBox(width: 6),
           Text(
-            nextDrawingAt == null ? '곧 다른 보기를 누를 수 있어요' : '다음 그림 준비 중',
+            nextDrawingAt != null
+                ? '다음 그림 준비 중'
+                : answerLockDurationMs > repeatWrongLockMs
+                ? '그림을 더 보고 다시 골라요'
+                : '곧 다른 보기를 누를 수 있어요',
             style: const TextStyle(fontSize: 13, color: neutral),
           ),
           const SizedBox(width: 7),
           ExcludeSemantics(
-            child: SizedBox(
-              width: 31,
-              child: LinearProgressIndicator(
-                key: const ValueKey('retry-wait-progress'),
-                value: remaining,
-                minHeight: 4,
-                color: wrongColor,
-                backgroundColor: const Color(0xffebdacc),
-                borderRadius: BorderRadius.circular(3),
-              ),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 31,
+                  child: LinearProgressIndicator(
+                    key: const ValueKey('retry-wait-progress'),
+                    value: remaining,
+                    minHeight: 4,
+                    color: wrongColor,
+                    backgroundColor: const Color(0xffebdacc),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+                if (nextDrawingAt == null &&
+                    answerLockDurationMs > repeatWrongLockMs)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: Text(
+                      '${((end - now) / 1000).ceil()}초',
+                      style: const TextStyle(fontSize: 12, color: neutral),
+                    ),
+                  ),
+              ],
             ),
           ),
         ],
@@ -1824,6 +1904,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     String option, {
     required bool locked,
     required bool retryReady,
+    bool wrapLabel = false,
   }) {
     final wrong = disabled.contains(option);
     final canRetry = retryReady && !wrong;
@@ -1854,14 +1935,68 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
       ),
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        child: Text(
-          wrong ? '✕ $option' : option,
-          textAlign: TextAlign.center,
-          maxLines: 1,
-          softWrap: false,
-        ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 16,
+            child: wrong
+                ? const Icon(
+                    Icons.close_rounded,
+                    key: ValueKey('wrong-choice-mark'),
+                    size: 15,
+                    semanticLabel: '오답',
+                  )
+                : null,
+          ),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final style = DefaultTextStyle.of(context).style;
+                final text = Text(
+                  option,
+                  style: style,
+                  textAlign: TextAlign.center,
+                  maxLines: wrapLabel ? 2 : 1,
+                  softWrap: wrapLabel,
+                );
+                var labelWidth = constraints.maxWidth;
+                if (wrapLabel && labelWidth > 0) {
+                  final painter = TextPainter(
+                    text: TextSpan(text: option, style: style),
+                    textDirection: Directionality.of(context),
+                    textScaler: MediaQuery.textScalerOf(context),
+                    maxLines: 2,
+                  )..layout(maxWidth: labelWidth);
+                  if (painter.didExceedMaxLines) {
+                    var low = labelWidth;
+                    var high = painter.maxIntrinsicWidth.ceilToDouble();
+                    while (high - low > 1) {
+                      final width = (high + low) / 2;
+                      painter.layout(maxWidth: width);
+                      if (painter.didExceedMaxLines) {
+                        low = width;
+                      } else {
+                        high = width;
+                      }
+                    }
+                    labelWidth = high;
+                  }
+                  painter.dispose();
+                }
+                return FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: wrapLabel
+                      ? ConstrainedBox(
+                          constraints: BoxConstraints(maxWidth: labelWidth),
+                          child: text,
+                        )
+                      : text,
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 16),
+        ],
       ),
     );
     if (!wrong || MediaQuery.disableAnimationsOf(context)) return button;
@@ -1963,82 +2098,123 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget results() => spacedPage([
-    Column(
-      children: [
-        title('시간 종료', size: 34, handwritten: true),
-        const SizedBox(
-          width: 122,
-          height: 13,
-          child: CustomPaint(painter: BrushUnderline(blue)),
-        ),
-        const SizedBox(height: 8),
-        CustomPaint(
-          painter: ScoreBrush(),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-            child: title('$score개 정답', size: 49, color: blue),
-          ),
-        ),
-        title('최고 기록 $best개', size: 17),
-      ],
-    ),
-    if (missed.isNotEmpty)
-      Padding(
-        padding: const EdgeInsets.symmetric(vertical: 20),
-        child: Column(
-          children: [
-            title('놓친 그림', size: 20),
-            const Text('그림을 눌러 다시 맞혀 보세요', style: TextStyle(fontSize: 13)),
-            const SizedBox(height: 8),
-            Center(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  spacing: 12,
-                  children: [
-                    for (final (label, strokes) in missed)
-                      SizedBox(
-                        width: missed.length == 1 ? 216 : 152,
-                        child: InkWell(
-                          onTap: () => reviewQuestion(label, strokes),
-                          borderRadius: BorderRadius.circular(20),
-                          child: Column(
-                            children: [
-                              AspectRatio(
-                                aspectRatio: 1,
-                                child: sketch(strokes, 1, false),
-                              ),
-                              const SizedBox(height: 6),
-                              title(label, size: 15),
-                            ],
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ],
+  Widget resultSummary() => Column(
+    children: [
+      title('시간 종료', size: 34, handwritten: true),
+      const SizedBox(
+        width: 122,
+        height: 13,
+        child: CustomPaint(painter: BrushUnderline(blue)),
+      ),
+      const SizedBox(height: 8),
+      CustomPaint(
+        painter: ScoreBrush(),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+          child: title('$score개 정답', size: 49, color: blue),
         ),
       ),
-    Column(
+      title('최고 기록 $best개', size: 17),
+    ],
+  );
+
+  Widget missedDrawings(double availableWidth) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 20),
+    child: Column(
       children: [
-        Row(
-          children: [
-            Expanded(child: primary('한 판 더', start, fontSize: 27)),
-            const SizedBox(width: 10),
-            Expanded(
-              child: secondary('홈으로', () => setState(() => phase = Phase.home)),
+        title('놓친 그림', size: 20),
+        const Text('그림을 눌러 다시 맞혀 보세요', style: TextStyle(fontSize: 13)),
+        const SizedBox(height: 8),
+        Center(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              spacing: 12,
+              children: [
+                for (final (label, strokes) in missed)
+                  SizedBox(
+                    width: min(availableWidth, missed.length == 1 ? 216 : 152),
+                    child: Semantics(
+                      button: true,
+                      label: '$label 다시 맞히기',
+                      onTap: () => reviewQuestion(label, strokes),
+                      excludeSemantics: true,
+                      child: InkWell(
+                        onTap: () => reviewQuestion(label, strokes),
+                        borderRadius: BorderRadius.circular(20),
+                        child: Column(
+                          children: [
+                            AspectRatio(
+                              aspectRatio: 1,
+                              child: sketch(strokes, 1, false),
+                            ),
+                            const SizedBox(height: 6),
+                            title(label, size: 15),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
-          ],
+          ),
         ),
-        const SizedBox(height: 12),
-        const AdBanner(),
       ],
     ),
-  ]);
+  );
+
+  Widget results() => LayoutBuilder(
+    builder: (context, constraints) {
+      final gutter = screenGutter(constraints.maxWidth);
+      final height = (MediaQuery.textScalerOf(context).scale(27) + 16).clamp(
+        55.0,
+        90.0,
+      );
+      return Column(
+        children: [
+          Expanded(
+            child: spacedPage(
+              [
+                resultSummary(),
+                if (missed.isNotEmpty)
+                  missedDrawings(max(0, constraints.maxWidth - 2 * gutter)),
+              ],
+              distribution: MainAxisAlignment.spaceEvenly,
+              verticalGutter: 12,
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(gutter, 8, gutter, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  key: const ValueKey('result-actions'),
+                  height: height,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(child: primary('한 판 더', start, fontSize: 27)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: secondary(
+                          '홈으로',
+                          () => setState(() => phase = Phase.home),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const AdBanner(),
+              ],
+            ),
+          ),
+        ],
+      );
+    },
+  );
 
   static Widget liftSketchPage(Widget page, Animation<double> animation) =>
       AnimatedBuilder(

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -487,6 +488,10 @@ void main() {
     }
 
     await expectHeading('스케치북 준비하기');
+    expect(
+      find.text('AI 그림 용량 약 ${SketchFlow.downloadMegabytes} MB'),
+      findsOneWidget,
+    );
     expect(find.widgetWithText(FilledButton, 'AI 그림 다운로드'), findsOneWidget);
     expect(find.widgetWithText(OutlinedButton, '기본 그림으로 시작'), findsOneWidget);
     final music = find.widgetWithText(FilterChip, '음악');
@@ -498,9 +503,43 @@ void main() {
       (await SharedPreferences.getInstance()).getBool('game_music'),
       isFalse,
     );
-    game.setState(() => game.openingSketchFlow = true);
+    final transfer = SketchFlowTransfer();
+    game.setState(() {
+      game.openingSketchFlow = true;
+      game.modelTransfer = transfer;
+      game.modelPercent = 34;
+    });
     await expectHeading('스케치북을 준비 중이에요');
     expect(music, findsNothing);
+    expect(find.text('다운로드 중 · 34%'), findsOneWidget);
+    final pause = find.widgetWithText(OutlinedButton, '일시정지');
+    await tester.ensureVisible(pause);
+    await tester.tap(pause);
+    await tester.pump();
+    expect(transfer.paused, isTrue);
+    expect(find.text('일시정지 중'), findsOneWidget);
+    game.setState(() {
+      game.openingSketchFlow = false;
+      game.modelTransfer = null;
+    });
+    await expectHeading('스케치북 준비하기');
+    expect(find.text('다운로드 일시정지 · 34%'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, '이어받기'), findsOneWidget);
+    game.setState(() {
+      game.modelDownloadPaused = false;
+      game.modelStatus = '연결을 확인해 주세요.';
+    });
+    await tester.pump();
+    expect(find.text('현재 34% 받음'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, '다시 시도'), findsOneWidget);
+    game.setState(() {
+      game.openingSketchFlow = true;
+      game.modelStatus = null;
+      game.modelPercent = 100;
+    });
+    await tester.pump();
+    expect(find.text('다운로드 완료 · 모델 확인 중'), findsOneWidget);
+    expect(pause, findsNothing);
     game.setState(() {
       game.openingSketchFlow = false;
       game.sketchFlow = _LoadedSketchFlow();
@@ -689,7 +728,13 @@ void main() {
       game.setState(() => game.options = [longOption, ...original.skip(1)]);
       await tester.pump();
       final longText = find.text(longOption);
-      expect(tester.widget<Text>(longText).maxLines, 1);
+      expect(tester.widget<Text>(longText).maxLines, 2);
+      expect(
+        tester.renderObject<RenderParagraph>(longText).didExceedMaxLines,
+        isFalse,
+        reason:
+            '${tester.renderObject<RenderParagraph>(longText).size} ${tester.getSize(find.widgetWithText(OutlinedButton, longOption))} ${tester.renderObject<RenderParagraph>(longText).text.style}',
+      );
       final longChoice = tester.widget<OutlinedButton>(
         find.widgetWithText(OutlinedButton, longOption),
       );
@@ -734,6 +779,32 @@ void main() {
       );
       expect(find.text('0점'), findsOneWidget);
       expect(tester.getBottomLeft(skip).dy, lessThan(890));
+      tester.view.physicalSize = const Size(780, 360);
+      tester.view.padding = const FakeViewPadding(right: 54, bottom: 18);
+      tester.view.viewPadding = const FakeViewPadding(right: 54, bottom: 18);
+      game.setState(() => game.options = ['사과', '꽃', '집', '나무']);
+      await tester.pump();
+      expect(find.byKey(const ValueKey('wide-play-layout')), findsOneWidget);
+      final landscapeOptions = find.byType(OutlinedButton);
+      expect(
+        tester.getTopLeft(landscapeOptions.at(0)).dy,
+        tester.getTopLeft(landscapeOptions.at(1)).dy,
+      );
+      expect(tester.getBottomLeft(skip).dy, lessThan(342));
+      expect(tester.getTopLeft(canvas).dx, greaterThanOrEqualTo(54));
+      expect(tester.takeException(), isNull);
+      game.setState(() => game.options = [longOption, '꽃', '집', '나무']);
+      await tester.pump();
+      expect(
+        tester.getTopLeft(landscapeOptions.at(1)).dy,
+        greaterThan(tester.getBottomLeft(landscapeOptions.at(0)).dy),
+      );
+      expect(
+        tester.renderObject<RenderParagraph>(longText).didExceedMaxLines,
+        isFalse,
+      );
+      expect(tester.takeException(), isNull);
+      game.setState(() => game.options = original);
       tester.view.physicalSize = const Size(466, 678);
       tester.view.padding = const FakeViewPadding(right: 72);
       tester.view.viewPadding = const FakeViewPadding(right: 72);
@@ -763,7 +834,7 @@ void main() {
         tester.widget<LinearProgressIndicator>(retryProgress).value,
         inInclusiveRange(0.0, 1.0),
       );
-      expect(find.text('✕ $wrong'), findsOneWidget);
+      expect(find.byKey(const ValueKey('wrong-choice-mark')), findsOneWidget);
       expect(
         (game.lockedUntil as int) - (game.elapsed as int),
         inInclusiveRange(650, 800),
@@ -792,9 +863,7 @@ void main() {
       );
       expect(
         tester
-            .widget<OutlinedButton>(
-              find.widgetWithText(OutlinedButton, '✕ $wrong'),
-            )
+            .widget<OutlinedButton>(find.widgetWithText(OutlinedButton, wrong))
             .onPressed,
         isNull,
       );
@@ -805,6 +874,19 @@ void main() {
       game.setState(() => game.lockedUntil = (game.elapsed as int) - 1500);
       await tester.pump();
       expect(retryCue, findsOneWidget);
+      final otherWrong = options.firstWhere(
+        (option) => option != answer && option != wrong,
+      );
+      await tester.tap(find.widgetWithText(OutlinedButton, otherWrong));
+      await tester.pump();
+      expect(game.answerLockDurationMs, 2600);
+      expect(find.text('그림을 더 보고 다시 골라요'), findsOneWidget);
+      expect(find.text('3초'), findsOneWidget);
+      expect(tester.getCenter(correctChoice), choicePosition);
+      game.setState(() => game.lockedUntil = (game.elapsed as int) - 1);
+      await tester.pump();
+      expect(retryCue, findsOneWidget);
+      expect(tester.getCenter(correctChoice), choicePosition);
       await tester.tap(find.widgetWithText(OutlinedButton, answer));
       await tester.pump();
       final secondPrompt = game.prompt as Prompt;
@@ -831,7 +913,7 @@ void main() {
         (game.roundResults as List<QuizResult>).single.outcome,
         QuizOutcome.correct,
       );
-      expect((game.roundResults as List<QuizResult>).single.wrongTaps, 1);
+      expect((game.roundResults as List<QuizResult>).single.wrongTaps, 2);
       tester.platformDispatcher.accessibilityFeaturesTestValue =
           const FakeAccessibilityFeatures(disableAnimations: true);
       addTearDown(
@@ -852,7 +934,7 @@ void main() {
       final reviewed = game.prompt as Prompt;
       game.missed.add((reviewed.label, reviewed.drawings.first));
       game.finish();
-      expect(game.lastBalanceSummary, contains('정답 3개 · 오답 1회'));
+      expect(game.lastBalanceSummary, contains('정답 3개 · 오답 2회'));
       tester.view.physicalSize = const Size(390, 844);
       await tester.pump();
       final replay = find.widgetWithText(FilledButton, '한 판 더');
@@ -861,6 +943,18 @@ void main() {
       expect(tester.widget<Text>(find.text('홈으로')).maxLines, 1);
       expect(tester.getSize(replay).height, tester.getSize(home).height);
       expect(tester.getCenter(replay).dy, tester.getCenter(home).dy);
+      tester.view.physicalSize = const Size(320, 568);
+      tester.view.padding = const FakeViewPadding(bottom: 24);
+      tester.view.viewPadding = const FakeViewPadding(bottom: 24);
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      await tester.pump();
+      final resultActions = find.byKey(const ValueKey('result-actions'));
+      expect(tester.getBottomLeft(resultActions).dy, lessThan(544));
+      expect(tester.getSize(replay).height, tester.getSize(home).height);
+      expect(tester.takeException(), isNull);
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
+      tester.view.physicalSize = const Size(390, 844);
+      await tester.pump();
       final missedCard = find.text(reviewed.label);
       await tester.ensureVisible(missedCard);
       await tester.tap(missedCard);
