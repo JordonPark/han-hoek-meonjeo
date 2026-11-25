@@ -1350,6 +1350,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       final retryReady = disabled.isNotEmpty && !answersLocked;
       final answers = Column(
         children: [
+          SizedBox(
+            height: largeText ? 42 : 28,
+            child: answerFeedback(
+              answerTime,
+              locked: answersLocked,
+              retryReady: retryReady,
+            ),
+          ),
           if (singleColumn)
             for (final option in options)
               Padding(
@@ -1381,15 +1389,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               ),
               SizedBox(height: row == 0 ? 10 : 4),
             ],
-          SizedBox(
-            height: largeText ? 42 : 28,
-            child: answerFeedback(
-              answerTime,
-              locked: answersLocked,
-              retryReady: retryReady,
-            ),
-          ),
-          skipButton(),
+          skipButton(deemphasize: disabled.isNotEmpty),
         ],
       );
       return spacedPage(
@@ -1439,7 +1439,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           title('틀렸어요', size: 14, color: wrongColor),
           const SizedBox(width: 6),
           Text(
-            nextDrawingAt == null ? '곧 다시 고를 수 있어요' : '다음 그림 준비 중',
+            nextDrawingAt == null ? '곧 다른 보기를 누를 수 있어요' : '다음 그림 준비 중',
             style: const TextStyle(fontSize: 13, color: neutral),
           ),
           const SizedBox(width: 7),
@@ -1462,9 +1462,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       message = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.keyboard_arrow_up_rounded, size: 19, color: blue),
+          const Icon(Icons.keyboard_arrow_down_rounded, size: 19, color: blue),
           const SizedBox(width: 3),
-          title('이제 다른 보기를 눌러 보세요', size: 14, color: blue),
+          title('다른 보기를 눌러 다시 답해요', size: 14, color: blue),
         ],
       );
     } else if (now < streakVisibleUntil && correctStreak >= 3) {
@@ -1480,9 +1480,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           title('$correctStreak연속 정답!', size: 16, color: blue),
         ],
       );
-    } else if (roundResults.isEmpty && !canSkip) {
+    } else if (roundResults.isEmpty) {
       message = const Text(
-        '그림 완성 2초 뒤에 건너뛸 수 있어요',
+        '그림을 보고 답을 골라요',
         style: TextStyle(fontSize: 13, color: neutral),
       );
     }
@@ -1492,9 +1492,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget skipButton() {
+  Widget skipButton({required bool deemphasize}) {
     final enabled = canSkip;
-    final foreground = enabled ? blue : const Color(0xff695947);
+    final emphasized = enabled && !deemphasize;
+    final foreground = emphasized ? blue : const Color(0xff695947);
     return Semantics(
       hint: enabled ? '남은 시간에서 3초를 차감합니다' : '그림이 완성되고 2초 뒤에 사용할 수 있습니다',
       child: TextButton(
@@ -1503,10 +1504,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         style: TextButton.styleFrom(
           foregroundColor: foreground,
           disabledForegroundColor: foreground,
-          backgroundColor: const Color(0xfff4f5ff),
+          backgroundColor: emphasized
+              ? const Color(0xfff4f5ff)
+              : const Color(0xfffffaf0),
           disabledBackgroundColor: const Color(0xfff5edde),
           side: BorderSide(
-            color: enabled ? const Color(0xff8294ce) : const Color(0xffc5b295),
+            color: emphasized
+                ? const Color(0xff8294ce)
+                : const Color(0xffb9a587),
           ),
           shape: const StadiumBorder(),
           minimumSize: const Size(0, 36),

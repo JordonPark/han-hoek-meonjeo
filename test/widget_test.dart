@@ -295,7 +295,7 @@ void main() {
       expect(
         tester.getTopLeft(find.byType(OutlinedButton).first).dy -
             tester.getBottomLeft(sketchbook).dy,
-        closeTo(10, 0.1),
+        closeTo(38, 0.1),
       );
       final canvas = find.byWidgetPredicate(
         (widget) => widget is CustomPaint && widget.painter is StrokePainter,
@@ -325,13 +325,16 @@ void main() {
       expect(find.text('0점'), findsOneWidget);
       final options = game.options as List<String>;
       final answer = (game.prompt as Prompt).label;
+      final correctChoice = find.widgetWithText(OutlinedButton, answer);
+      final choicePosition = tester.getCenter(correctChoice);
       expect(familiarQuestions, contains((game.prompt as Prompt).id));
       expect(openingQuestions, contains((game.prompt as Prompt).id));
       final wrong = options.firstWhere((option) => option != answer);
       await tester.tap(find.widgetWithText(OutlinedButton, wrong));
       await tester.pump();
       expect(find.text('틀렸어요'), findsOneWidget);
-      expect(find.text('곧 다시 고를 수 있어요'), findsOneWidget);
+      expect(find.text('곧 다른 보기를 누를 수 있어요'), findsOneWidget);
+      expect(tester.getCenter(correctChoice), choicePosition);
       final retryProgress = find.byKey(const ValueKey('retry-wait-progress'));
       expect(
         tester.widget<LinearProgressIndicator>(retryProgress).value,
@@ -351,7 +354,13 @@ void main() {
       game.setState(() => game.lockedUntil = (game.elapsed as int) - 1);
       await tester.pump();
       expect(retryProgress, findsNothing);
-      expect(find.text('이제 다른 보기를 눌러 보세요'), findsOneWidget);
+      final retryCue = find.text('다른 보기를 눌러 다시 답해요');
+      expect(retryCue, findsOneWidget);
+      expect(
+        tester.getBottomLeft(retryCue).dy,
+        lessThan(tester.getTopLeft(correctChoice).dy),
+      );
+      expect(tester.getCenter(correctChoice), choicePosition);
       expect(
         tester
             .widget<OutlinedButton>(find.widgetWithText(OutlinedButton, answer))
@@ -372,10 +381,10 @@ void main() {
       expect(retryChoice.style?.side?.resolve({})?.color, blue);
       game.setState(() => game.lockedUntil = (game.elapsed as int) - 1500);
       await tester.pump();
-      expect(find.text('이제 다른 보기를 눌러 보세요'), findsOneWidget);
+      expect(retryCue, findsOneWidget);
       await tester.tap(find.widgetWithText(OutlinedButton, answer));
       await tester.pump();
-      expect(find.text('이제 다른 보기를 눌러 보세요'), findsNothing);
+      expect(retryCue, findsNothing);
       expect(game.deadlineMs, roundStartMs + correctBonusMs);
       expect(find.text('+1초'), findsOneWidget);
       await tester.pump(const Duration(milliseconds: 160));
