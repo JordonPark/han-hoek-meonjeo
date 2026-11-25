@@ -2126,57 +2126,63 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     ],
   );
 
-  Widget missedDrawings(double availableWidth, {double? compactCardSize}) =>
-      Padding(
-        padding: EdgeInsets.symmetric(
-          vertical: compactCardSize == null ? 20 : 0,
-        ),
-        child: Column(
-          children: [
-            title('놓친 그림', size: 20),
-            const Text('그림을 눌러 다시 맞혀 보세요', style: TextStyle(fontSize: 13)),
-            const SizedBox(height: 8),
-            Center(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  spacing: 12,
-                  children: [
-                    for (final (label, strokes) in missed)
-                      SizedBox(
-                        width: min(
-                          availableWidth,
-                          compactCardSize ?? (missed.length == 1 ? 216 : 152),
-                        ),
-                        child: Semantics(
-                          button: true,
-                          label: '$label 다시 맞히기',
-                          onTap: () => reviewQuestion(label, strokes),
-                          excludeSemantics: true,
-                          child: InkWell(
-                            onTap: () => reviewQuestion(label, strokes),
-                            borderRadius: BorderRadius.circular(20),
-                            child: Column(
-                              children: [
-                                AspectRatio(
-                                  aspectRatio: 1,
-                                  child: sketch(strokes, 1, false),
-                                ),
-                                const SizedBox(height: 6),
-                                title(label, size: 15),
-                              ],
+  Widget missedDrawings(
+    double availableWidth, {
+    double? compactCardSize,
+  }) => Padding(
+    padding: EdgeInsets.symmetric(vertical: compactCardSize == null ? 20 : 0),
+    child: Column(
+      children: [
+        title('놓친 그림', size: 20),
+        const Text('그림을 눌러 다시 맞혀 보세요', style: TextStyle(fontSize: 13)),
+        const SizedBox(height: 8),
+        Center(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              spacing: 12,
+              children: [
+                for (final (label, strokes) in missed)
+                  SizedBox(
+                    width: min(
+                      availableWidth,
+                      compactCardSize ?? (missed.length == 1 ? 216 : 152),
+                    ),
+                    child: Semantics(
+                      button: true,
+                      label: '$label 다시 맞히기',
+                      onTap: () => reviewQuestion(label, strokes),
+                      excludeSemantics: true,
+                      child: InkWell(
+                        onTap: () => reviewQuestion(label, strokes),
+                        borderRadius: BorderRadius.circular(20),
+                        child: Column(
+                          children: [
+                            AspectRatio(
+                              aspectRatio: 1,
+                              child: sketch(strokes, 1, false),
                             ),
-                          ),
+                            const SizedBox(height: 6),
+                            if (compactCardSize == null)
+                              title(label, size: 15)
+                            else
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: title(label, size: 15, singleLine: true),
+                              ),
+                          ],
                         ),
                       ),
-                  ],
-                ),
-              ),
+                    ),
+                  ),
+              ],
             ),
-          ],
+          ),
         ),
-      );
+      ],
+    ),
+  );
 
   Widget results() => LayoutBuilder(
     builder: (context, constraints) {
@@ -2199,8 +2205,26 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                         0.0,
                         (area.maxWidth - 2 * gutter - 16) / 2,
                       );
+                      final textScaler = MediaQuery.textScalerOf(context);
+                      final direction = Directionality.of(context);
+                      final style = DefaultTextStyle.of(context).style;
+                      double lineHeight(double size) {
+                        final painter = TextPainter(
+                          text: TextSpan(
+                            text: '한',
+                            style: style.copyWith(fontSize: size),
+                          ),
+                          textDirection: direction,
+                          textScaler: textScaler,
+                        )..layout();
+                        final height = painter.height;
+                        painter.dispose();
+                        return height;
+                      }
+
+                      // Keep both captions and the card label above the footer.
                       final overhead =
-                          MediaQuery.textScalerOf(context).scale(48) + 38;
+                          lineHeight(20) + lineHeight(13) + lineHeight(15) + 40;
                       final card = (area.maxHeight - overhead).clamp(
                         72.0,
                         156.0,

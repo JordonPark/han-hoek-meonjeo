@@ -956,6 +956,14 @@ void main() {
         tester.getBottomLeft(find.text(reviewed.label)).dy,
         lessThan(tester.getTopLeft(replay).dy),
       );
+      final resultScroll = find.ancestor(
+        of: find.byKey(const ValueKey('wide-result-layout')),
+        matching: find.byType(SingleChildScrollView),
+      );
+      expect(
+        tester.getBottomLeft(find.text(reviewed.label)).dy,
+        lessThan(tester.getBottomLeft(resultScroll).dy),
+      );
       expect(tester.getSize(replay).height, tester.getSize(home).height);
       tester.view.physicalSize = const Size(320, 568);
       tester.view.padding = const FakeViewPadding(bottom: 24);
