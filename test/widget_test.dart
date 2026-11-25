@@ -1,8 +1,11 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:rabbit_sketchbook/main.dart';
+import 'package:rabbit_sketchbook/quiz_balance.dart';
 import 'package:rabbit_sketchbook/sketchflow.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -15,6 +18,42 @@ class _LoadedSketchFlow implements SketchFlow {
 }
 
 void main() {
+  test('levels increase every two points and assistance lowers one level', () {
+    expect(List.generate(10, quizLevel), [1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
+    expect(quizLevel(8, assistance: true), 4);
+    expect(quizLevel(0, assistance: true), 1);
+  });
+
+  test('distractor mix changes by level and excludes ambiguous pairs', () {
+    const ranked = ['mug', 'coffee cup', 'bowl', 'bucket', 'vase', 'teapot'];
+    for (var level = 1; level <= 5; level++) {
+      final choices = quizDistractors(
+        answer: 'cup',
+        candidates: {...ranked, 'cup', 'star', 'cat', 'airplane'},
+        ranked: ranked,
+        level: level,
+        random: Random(1),
+      );
+      expect(choices.similar, hasLength(min(level - 1, 3)));
+      expect(choices.distinct, hasLength(3 - choices.similar.length));
+      expect([...choices.similar, ...choices.distinct], isNot(contains('mug')));
+    }
+  });
+
+  test(
+    'drawing validation rejects obvious jumps but accepts a resampled line',
+    () {
+      final line = List.generate(21, (i) => Offset(i / 20, 0));
+      expect(hasSketchArtifacts([line], 1), isFalse);
+      expect(
+        hasSketchArtifacts([
+          [...line, const Offset(0, 1)],
+        ], 1),
+        isTrue,
+      );
+    },
+  );
+
   testWidgets('download headings fit on one line with side insets', (
     tester,
   ) async {
@@ -25,7 +64,10 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     SharedPreferences.setMockInitialValues({});
-    addTearDown(() => rootBundle.evict('assets/questions.json'));
+    addTearDown(() {
+      rootBundle.evict('assets/questions.json');
+      rootBundle.evict('assets/related_questions.json');
+    });
     await tester.pumpWidget(const Sketchbook());
     final dynamic game = tester.state(find.byType(GameScreen));
     game.setState(() => game.phase = Phase.download);
@@ -184,6 +226,13 @@ void main() {
       expect(find.byType(OutlinedButton), findsNWidgets(4));
       expect(tester.widget<TextButton>(skip).onPressed, isNull);
       expect(tester.getBottomLeft(skip).dy, lessThan(844));
+      final sketchbook = find.byKey(const ValueKey('play-sketchbook'));
+      expect(tester.getSize(sketchbook).width, closeTo(238, 0.1));
+      expect(
+        tester.getTopLeft(find.byType(OutlinedButton).first).dy -
+            tester.getBottomLeft(sketchbook).dy,
+        closeTo(10, 0.1),
+      );
       final canvas = find.byWidgetPredicate(
         (widget) => widget is CustomPaint && widget.painter is StrokePainter,
       );
@@ -213,6 +262,7 @@ void main() {
       final dynamic game = tester.state(find.byType(GameScreen));
       final options = game.options as List<String>;
       final answer = (game.prompt as Prompt).label;
+      expect(familiarQuestions, contains((game.prompt as Prompt).id));
       final wrong = options.firstWhere((option) => option != answer);
       await tester.tap(find.widgetWithText(OutlinedButton, wrong));
       await tester.pump();
@@ -239,7 +289,13 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 200));
       expect(canvas, findsOneWidget);
+      expect(
+        (game.roundResults as List<QuizResult>).single.outcome,
+        QuizOutcome.correct,
+      );
+      expect((game.roundResults as List<QuizResult>).single.wrongTaps, 1);
       game.finish();
+      expect(game.lastBalanceSummary, contains('정답 1개 · 오답 1회'));
       tester.view.physicalSize = const Size(390, 844);
       await tester.pump();
       final replay = find.widgetWithText(FilledButton, '한 판 더');

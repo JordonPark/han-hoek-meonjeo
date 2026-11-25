@@ -9,6 +9,28 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
 import 'package:path_provider/path_provider.dart';
 
+bool hasSketchArtifacts(List<List<Offset>> strokes, double extent) {
+  if (!extent.isFinite || extent < 0.05) return true;
+  final segments = <double>[];
+  var fragments = 0;
+  for (final stroke in strokes) {
+    var length = 0.0;
+    for (var i = 1; i < stroke.length; i++) {
+      final distance = (stroke[i] - stroke[i - 1]).distance;
+      length += distance;
+      if (distance > 0) segments.add(distance);
+    }
+    if (length < extent * 0.015) fragments++;
+  }
+  if (segments.length < 7 ||
+      (strokes.length >= 12 && fragments * 3 > strokes.length * 2)) {
+    return true;
+  }
+  segments.sort();
+  final median = segments[segments.length ~/ 2];
+  return segments.last > max(extent * 0.36, 12 * median);
+}
+
 class SketchFlow {
   static const _base =
       'https://github.com/JordonPark/han-hoek-meonjeo/releases/download/sketchflow-mobile-v1';
@@ -210,7 +232,7 @@ class SketchFlow {
     final left = xs.reduce(min), right = xs.reduce(max);
     final top = ys.reduce(min), bottom = ys.reduce(max);
     final extent = max(right - left, bottom - top);
-    if (extent <= 0) return [];
+    if (hasSketchArtifacts(strokes, extent)) return [];
     final mid = Offset((left + right) / 2, (top + bottom) / 2);
     return strokes
         .map(
