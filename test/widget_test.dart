@@ -153,7 +153,7 @@ void main() {
     expect(progress(62000, 61000), progress(63000, 62000));
   });
   testWidgets(
-    'starts an offline round with four options and skipping initially disabled',
+    'plays and reviews an offline round from setup without downloading AI',
     (tester) async {
       tester.view.devicePixelRatio = 1;
       tester.view.physicalSize = const Size(390, 844);
@@ -211,9 +211,22 @@ void main() {
       tester.view.viewPadding = const FakeViewPadding(right: 72);
       expect(tester.getBottomLeft(start).dy, lessThan(678));
       tester.view.physicalSize = const Size(390, 844);
+      final dynamic game = tester.state(find.byType(GameScreen));
+      game.setState(() => game.phase = Phase.download);
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       await tester.pump();
-      await tester.tap(start);
+      final basic = find.widgetWithText(OutlinedButton, '기본 그림으로 시작');
+      await tester.ensureVisible(basic);
+      expect(tester.takeException(), isNull);
+      await tester.tap(basic);
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
       await tester.pump();
+      expect(
+        (await SharedPreferences.getInstance()).getBool(sketchFlowSetupKey),
+        isTrue,
+      );
+      expect(game.aiRound, isFalse);
       for (final label in ['3', '2', '1']) {
         expect(find.text(label), findsOneWidget);
         expect(find.text('01:00'), findsNothing);
@@ -227,7 +240,6 @@ void main() {
       expect(find.byType(OutlinedButton), findsNWidgets(4));
       expect(tester.widget<TextButton>(skip).onPressed, isNull);
       expect(tester.getBottomLeft(skip).dy, lessThan(844));
-      final dynamic game = tester.state(find.byType(GameScreen));
       final original = List<String>.of(game.options as List<String>);
       const longOption = '아주 긴 제시어가 들어간 보기';
       game.setState(() => game.options = [longOption, ...original.skip(1)]);

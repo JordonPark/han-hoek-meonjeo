@@ -127,7 +127,11 @@ class Prompt {
   final List<List<List<Offset>>> drawings;
 }
 
-enum Phase { download, home, preparing, playing, results }
+enum Phase { launching, download, home, preparing, playing, results }
+
+bool get offersSketchFlow => SketchFlow.available && quizPlaytestSeed == null;
+
+const sketchFlowSetupKey = 'sketchflow_setup_seen';
 
 class GameScreen extends StatefulWidget {
   const GameScreen({super.key});
@@ -160,9 +164,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   List<String> options = [];
   List<List<Offset>> drawing = [];
   Prompt? prompt;
-  Phase phase = SketchFlow.available && quizPlaytestSeed == null
-      ? Phase.download
-      : Phase.home;
+  Phase phase = offersSketchFlow ? Phase.launching : Phase.home;
   Timer? refresh;
   String? error;
   int score = 0;
@@ -182,6 +184,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool loading = true;
   bool audioSettingsChanged = false;
   SketchFlow? sketchFlow;
+  bool sketchFlowSetupSeen = false;
   bool openingSketchFlow = false;
   SketchFlowTransfer? modelTransfer;
   bool preparingDrawing = false;
@@ -210,37 +213,50 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     unawaited(loadPack());
     unawaited(loadPreferences());
-    if (SketchFlow.available && quizPlaytestSeed == null) {
+    if (offersSketchFlow) {
       unawaited(checkModel());
     }
   }
 
   Future<void> checkModel() async {
-    var openingCachedModel = false;
+    var seen = false;
     try {
-      if (!await SketchFlow.isDownloaded() ||
-          !mounted ||
-          phase != Phase.download ||
-          openingSketchFlow) {
-        return;
-      }
-      openingCachedModel = true;
-      setState(() => openingSketchFlow = true);
-      final model = await SketchFlow.open();
+      final preferences = await SharedPreferences.getInstance();
+      seen = preferences.getBool(sketchFlowSetupKey) ?? false;
+      final model = await SketchFlow.isDownloaded()
+          ? await SketchFlow.open()
+          : null;
+      final savedPercent = model == null
+          ? await SketchFlow.savedDownloadPercent()
+          : null;
       if (!mounted) {
-        await model.dispose();
+        await model?.dispose();
         return;
       }
       setState(() {
         sketchFlow = model;
-        phase = Phase.home;
+        modelPercent = savedPercent;
+        sketchFlowSetupSeen = seen || model != null;
+        phase = sketchFlowSetupSeen ? Phase.home : Phase.download;
       });
+      if (model != null && !seen) unawaited(saveSketchFlowSetup());
     } catch (_) {
-      if (mounted) setState(() => modelStatus = '스케치북을 열지 못했어요. 다시 시도해 주세요.');
-    } finally {
-      if (mounted && openingCachedModel) {
-        setState(() => openingSketchFlow = false);
+      if (mounted) {
+        setState(() {
+          sketchFlowSetupSeen = seen;
+          phase = seen ? Phase.home : Phase.download;
+          modelStatus = 'AI 그림을 불러오지 못했어요. 기본 그림으로 시작할 수 있어요.';
+        });
       }
+    }
+  }
+
+  Future<void> saveSketchFlowSetup() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setBool(sketchFlowSetupKey, true);
+    } catch (_) {
+      // The choice still applies to this session.
     }
   }
 
@@ -269,7 +285,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       setState(() => sketchFlow = model);
     } catch (_) {
       if (mounted && !transfer.paused) {
-        setState(() => modelStatus = '다운로드에 문제가 생겼어요. 다시 시도해 주세요.');
+        setState(
+          () => modelStatus = 'AI 그림을 준비하지 못했어요. 다시 시도하거나 기본 그림으로 시작하세요.',
+        );
       }
     } finally {
       if (mounted) {
@@ -436,13 +454,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Future<void> start() async {
     if (pack.isEmpty || phase == Phase.preparing || playing) return;
-    if (SketchFlow.available &&
-        quizPlaytestSeed == null &&
-        sketchFlow == null) {
-      setState(() => phase = Phase.download);
-      return;
-    }
+    final finishingSetup = phase == Phase.download && !sketchFlowSetupSeen;
     setState(() {
+      if (finishingSetup) sketchFlowSetupSeen = true;
       phase = Phase.preparing;
       countdown = 3;
       score = 0;
@@ -467,9 +481,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       preparingDrawing = aiRound;
       if (!preparingDrawing) nextQuestion();
     });
+    if (finishingSetup) unawaited(saveSketchFlowSetup());
     if (preparingDrawing) {
       await prepareDrawing(upcomingPrompt(1, opening: true))
-          .timeout(const Duration(seconds: 45), onTimeout: () {});
+          .timeout(const Duration(seconds: 6), onTimeout: () {});
       if (!mounted || phase != Phase.preparing) return;
       setState(() {
         preparingDrawing = false;
@@ -775,6 +790,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 maxWidth: phase == Phase.playing ? 920 : 560,
               ),
               child: switch (phase) {
+                Phase.launching => Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      appTitle(),
+                      const SizedBox(height: 20),
+                      const CircularProgressIndicator(),
+                    ],
+                  ),
+                ),
                 Phase.download => downloadPage(),
                 Phase.home => home(),
                 Phase.preparing => prepare(),
@@ -933,7 +958,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           ),
           if (!openingSketchFlow && !complete)
             const Text(
-              '한 번 받으면 오프라인으로 플레이할 수 있어요',
+              '한 번 받으면 인터넷 없이 AI가 새 그림을 그려요.',
               textAlign: TextAlign.center,
             ),
         ],
@@ -961,7 +986,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 8),
             if (progress != null && !complete)
-              title(progress == 100 ? '모델 확인 중' : '$progress%', size: 24),
+              title(
+                progress == 100 && openingSketchFlow ? '모델 확인 중' : '$progress%',
+                size: 24,
+              ),
             const SizedBox(height: 10),
           ],
           if (modelStatus != null)
@@ -979,18 +1007,31 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             else
               const SizedBox(height: 48)
           else ...[
-            Text('약 ${SketchFlow.downloadMiB} MiB'),
+            Text('약 ${SketchFlow.downloadMegabytes} MB'),
             const SizedBox(height: 8),
             primary(
               modelStatus != null
                   ? '다시 시도'
                   : progress != null
                   ? '이어받기'
-                  : '다운로드',
+                  : 'AI 그림 다운로드',
               enableModel,
             ),
             const SizedBox(height: 8),
-            secondary('나중에', () => setState(() => phase = Phase.home)),
+            secondary(
+              '기본 그림으로 시작',
+              loading || error != null ? null : start,
+              fontSize: 24,
+            ),
+            if (sketchFlowSetupSeen)
+              TextButton(
+                onPressed: () => setState(() => phase = Phase.home),
+                child: const Text('홈으로'),
+              ),
+          ],
+          if (error != null) ...[
+            Text(error!, textAlign: TextAlign.center),
+            TextButton(onPressed: loadPack, child: const Text('문제 목록 다시 불러오기')),
           ],
         ],
       ),
@@ -1005,6 +1046,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         title('60초 동안 그림을 맞혀요', size: 21),
         const SizedBox(height: 4),
         const Text('정답 +1초 · 건너뛰기 −3초', textAlign: TextAlign.center),
+        const Text('그림이 완성되기 전에도 답을 고를 수 있어요.', textAlign: TextAlign.center),
       ],
     ),
     Padding(
@@ -1027,6 +1069,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           primary('다시 시도', loadPack),
         ] else
           primary(loading ? '불러오는 중' : '시작', loading ? null : start),
+        if (offersSketchFlow && sketchFlow == null)
+          TextButton(
+            onPressed: () => setState(() => phase = Phase.download),
+            child: Text(modelPercent == null ? 'AI 그림 받기' : 'AI 그림 이어받기'),
+          ),
         const SizedBox(height: 12),
         title('최고 기록 $best개', size: 17),
       ],
@@ -1139,7 +1186,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     Semantics(
       liveRegion: true,
       child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 160),
+        duration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 160),
         child: KeyedSubtree(
           key: ValueKey(preparingDrawing ? -1 : countdown),
           child: title(
@@ -1154,6 +1203,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         ),
       ),
     ),
+    if (preparingDrawing)
+      const Text('준비가 오래 걸리면 기본 그림으로 시작해요.', textAlign: TextAlign.center),
   ]);
 
   Widget game() => LayoutBuilder(
@@ -1210,6 +1261,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                         ? aiDrawing
                               ? 'AI 그림'
                               : '저장된 그림'
+                        : offersSketchFlow
+                        ? '기본 그림'
                         : '',
                     style: const TextStyle(
                       fontSize: 13,
@@ -1445,6 +1498,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               spacing: 6,
               children: [
+                const Text(
+                  '시간 제한 없이 다시 풀 수 있어요. 최고 기록에는 반영되지 않아요.',
+                  textAlign: TextAlign.center,
+                ),
                 replay,
                 for (final option in reviewOptions)
                   OutlinedButton(

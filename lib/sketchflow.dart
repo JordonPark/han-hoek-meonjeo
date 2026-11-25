@@ -38,7 +38,10 @@ class SketchFlow {
       '41fea316430c4992dea6d96502de3a4231fecc5956bcfc390eb6be637363f6dc';
   static const _dataHash =
       '1349bfd0d20c0498f83f1c5a0448195a70d266a5ae66d029757940db361b6962';
-  static const downloadMiB = 120;
+  static const _dataSize = 3764098;
+  static const _modelSize = 121792379;
+  static const _size = _dataSize + _modelSize;
+  static final downloadMegabytes = (_size / 1000000).round();
   static bool get available =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
@@ -64,15 +67,28 @@ class SketchFlow {
         File('${directory.path}/sketchflow.json').existsSync();
   }
 
+  static Future<int?> savedDownloadPercent() async {
+    final directory = await _directory();
+    Future<int> savedBytes(String name, int size) async {
+      if (await File('${directory.path}/$name').exists()) return size;
+      final partial = File('${directory.path}/$name.part');
+      if (!await partial.exists()) return 0;
+      final length = await partial.length();
+      return length <= size ? length : 0;
+    }
+
+    final received =
+        await savedBytes('sketchflow.json', _dataSize) +
+        await savedBytes('sketchflow.onnx', _modelSize);
+    return received == 0 ? null : (100 * received ~/ _size).clamp(0, 99);
+  }
+
   static Future<SketchFlow> open({
     SketchFlowTransfer? transfer,
     void Function(double progress)? onDownload,
   }) async {
     final directory = await _directory();
     await directory.create(recursive: true);
-    const dataSize = 3764098;
-    const modelSize = 121792379;
-    const total = dataSize + modelSize;
     Future<File> fetch(String name, String hash, int size, int previous) async {
       final file = File('${directory.path}/$name');
       if (await file.exists()) return file;
@@ -100,7 +116,7 @@ class SketchFlow {
           );
         }
 
-        onDownload?.call((previous + received) / total);
+        onDownload?.call((previous + received) / _size);
         final sink = temporary.openWrite(
           mode: received > 0 ? FileMode.append : FileMode.write,
         );
@@ -111,7 +127,7 @@ class SketchFlow {
               if (received > size) {
                 throw const FormatException('Unexpected model size');
               }
-              onDownload?.call((previous + received) / total);
+              onDownload?.call((previous + received) / _size);
               return chunk;
             }),
           );
@@ -131,12 +147,12 @@ class SketchFlow {
     }
 
     try {
-      final data = await fetch('sketchflow.json', _dataHash, dataSize, 0);
+      final data = await fetch('sketchflow.json', _dataHash, _dataSize, 0);
       final model = await fetch(
         'sketchflow.onnx',
         _modelHash,
-        modelSize,
-        dataSize,
+        _modelSize,
+        _dataSize,
       );
       if (transfer?.paused ?? false) throw StateError('Model download paused');
       final config =
