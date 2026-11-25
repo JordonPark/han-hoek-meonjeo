@@ -230,6 +230,15 @@ void main() {
       await tester.pump();
       expect(game.deadlineMs, roundStartMs + correctBonusMs);
       expect(find.text('+1초'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 160));
+      expect(canvas, findsNWidgets(2));
+      final pages = canvas.evaluate().toList();
+      expect(
+        tester.getTopLeft(find.byWidget(pages.last.widget)).dy,
+        lessThan(tester.getTopLeft(find.byWidget(pages.first.widget)).dy),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(canvas, findsOneWidget);
       game.finish();
       tester.view.physicalSize = const Size(390, 844);
       await tester.pump();

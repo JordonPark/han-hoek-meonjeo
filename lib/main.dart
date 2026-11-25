@@ -958,7 +958,25 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         child: Center(
           child: SizedBox.square(
             dimension: canvasSize,
-            child: sketch(drawing, progress, true),
+            child: boundSketchbook(
+              MediaQuery.disableAnimationsOf(context)
+                  ? sketchPage(drawing, progress, true)
+                  : ClipRect(
+                      child: AnimatedSwitcher(
+                        duration: Duration.zero,
+                        reverseDuration: const Duration(milliseconds: 320),
+                        layoutBuilder: (current, previous) => Stack(
+                          fit: StackFit.expand,
+                          children: [?current, ...previous],
+                        ),
+                        transitionBuilder: liftSketchPage,
+                        child: KeyedSubtree(
+                          key: ValueKey(prompt?.id),
+                          child: sketchPage(drawing, progress, true),
+                        ),
+                      ),
+                    ),
+            ),
           ),
         ),
       );
@@ -1142,33 +1160,51 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     ),
   ]);
 
-  Widget sketch(List<List<Offset>> strokes, double progress, bool pencil) =>
-      Padding(
-        padding: const EdgeInsets.only(top: 5, bottom: 5),
-        child: CustomPaint(
-          foregroundPainter: const SketchbookBinding(),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: const Color(0xfffffbef),
-              image: const DecorationImage(
-                image: paperTexture,
-                fit: BoxFit.cover,
-                opacity: 0.42,
-              ),
-              border: Border.all(color: ink, width: 1.7),
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: const [
-                BoxShadow(color: Color(0xffd9c49c), offset: Offset(0, 4)),
-                BoxShadow(color: Color(0xff6b5437), offset: Offset(0, 6)),
-              ],
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: CustomPaint(
-                painter: StrokePainter(strokes, progress, pencil),
-              ),
-            ),
+  static Widget liftSketchPage(Widget page, Animation<double> animation) =>
+      AnimatedBuilder(
+        animation: animation,
+        child: page,
+        builder: (context, child) => FractionalTranslation(
+          translation: Offset(
+            0,
+            animation.status == AnimationStatus.reverse || animation.isDismissed
+                ? -Curves.easeInOutCubic.transform(1 - animation.value)
+                : 0,
           ),
+          child: child,
+        ),
+      );
+
+  Widget boundSketchbook(Widget page) => Padding(
+    padding: const EdgeInsets.only(top: 5, bottom: 5),
+    child: CustomPaint(
+      foregroundPainter: const SketchbookBinding(),
+      child: page,
+    ),
+  );
+
+  Widget sketch(List<List<Offset>> strokes, double progress, bool pencil) =>
+      boundSketchbook(sketchPage(strokes, progress, pencil));
+
+  Widget sketchPage(List<List<Offset>> strokes, double progress, bool pencil) =>
+      DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xfffffbef),
+          image: const DecorationImage(
+            image: paperTexture,
+            fit: BoxFit.cover,
+            opacity: 0.42,
+          ),
+          border: Border.all(color: ink, width: 1.7),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: const [
+            BoxShadow(color: Color(0xffd9c49c), offset: Offset(0, 4)),
+            BoxShadow(color: Color(0xff6b5437), offset: Offset(0, 6)),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: CustomPaint(painter: StrokePainter(strokes, progress, pencil)),
         ),
       );
 }
