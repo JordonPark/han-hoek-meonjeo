@@ -1,0 +1,59 @@
+html {
+  color-scheme: light;
+  background: #fff7e7;
+  color: #30251b;
+  font-family: system-ui, sans-serif;
+  line-height: 1.65;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 42rem;
+  padding: 3rem clamp(1.15rem, 5vw, 3rem);
+  margin: auto;
+}
+
+.app-name {
+  margin: 0;
+  color: #2643ae;
+  font-weight: 700;
+}
+
+h1 {
+  margin: 0.1rem 0 1.5rem;
+  font-size: clamp(1.95rem, 7vw, 3rem);
+  line-height: 1.2;
+}
+
+h2 {
+  margin: 2rem 0 0.35rem;
+  font-size: 1.15rem;
+}
+
+p {
+  margin: 0.7rem 0;
+}
+
+a {
+  color: #2643ae;
+  text-underline-offset: 0.15em;
+}
+
+.button {
+  display: inline-block;
+  margin: 0.7rem 0 0.4rem;
+  padding: 0.65rem 1rem;
+  border-radius: 0.7rem;
+  background: #2643ae;
+  color: #fff;
+  font-weight: 700;
+}
+
+nav {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid #dfd2bb;
+}

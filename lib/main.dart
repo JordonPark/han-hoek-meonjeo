@@ -7,6 +7,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'fun_design.dart';
 import 'game_audio.dart';
@@ -1387,6 +1388,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   ], range: '최근 일반 플레이와 재도전 기록'),
                   child: const Text('재미 검수'),
                 ),
+                TextButton(
+                  onPressed: () => openStorePage('privacy.html'),
+                  child: const Text('개인정보 처리방침'),
+                ),
+                TextButton(
+                  onPressed: () => openStorePage('support.html'),
+                  child: const Text('고객 지원'),
+                ),
                 const Text('그림 데이터: Google Quick, Draw! (CC BY 4.0)'),
                 const SelectableText(
                   'https://github.com/googlecreativelab/quickdraw-dataset',
@@ -1403,6 +1412,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       ),
     ),
   ], distribution: MainAxisAlignment.spaceEvenly);
+
+  Future<void> openStorePage(String page) async {
+    final url = Uri.https('jordonpark.github.io', '/han-hoek-meonjeo/$page');
+    if (await launchUrl(url, mode: LaunchMode.externalApplication) ||
+        !mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('페이지를 열 수 없어요. 잠시 후 다시 시도해 주세요.')),
+    );
+  }
 
   Widget audioSettings() => Wrap(
     alignment: WrapAlignment.center,
