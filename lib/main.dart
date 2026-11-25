@@ -1617,16 +1617,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       final largeText = labelSize >= answerLabelSize * 1.6;
       final paneWidth = sideBySide ? (contentWidth - 20) * .4 : contentWidth;
       bool answerNeedsFullWidth() {
-        // The button reserves 12 px for padding and 32 px for its answer mark.
-        final labelWidth = max(1.0, (paneWidth - 12) / 2 - 44);
+        final labelWidth = max(1.0, (paneWidth - 12) / 2 - 16);
         return options.any((option) {
           final text = TextPainter(
             text: TextSpan(text: option, style: answerLabelStyle),
             textDirection: Directionality.of(context),
             textScaler: textScaler,
-            maxLines: 2,
-          )..layout(maxWidth: labelWidth);
-          final needsWidth = text.didExceedMaxLines;
+            maxLines: 1,
+          )..layout();
+          final needsWidth = labelWidth < text.width * .68;
           text.dispose();
           return needsWidth;
         });
@@ -1640,8 +1639,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       final singleColumn =
           (sideBySide && !compactWide) ||
           (largeText && contentWidth < 360) ||
-          (!sideBySide && contentWidth < 330 && answerNeedsFullWidth());
-      final wrapOptions = compactWide || singleColumn || contentWidth < 330;
+          (!sideBySide && contentWidth < 220 && answerNeedsFullWidth());
       final canvasSize = sideBySide
           ? min(
               (contentWidth - 20) * 0.60,
@@ -1780,7 +1778,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     option,
                     locked: answersLocked,
                     retryReady: retryReady,
-                    wrapLabel: wrapOptions,
                   ),
                 ),
               )
@@ -1795,7 +1792,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                         options[row * 2 + column],
                         locked: answersLocked,
                         retryReady: retryReady,
-                        wrapLabel: wrapOptions,
                       ),
                     ),
                   ],
@@ -2004,99 +2000,70 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     String option, {
     required bool locked,
     required bool retryReady,
-    bool wrapLabel = false,
   }) {
     final wrong = disabled.contains(option);
     final canRetry = retryReady && !wrong;
-    final button = OutlinedButton(
-      onPressed: wrong || locked ? null : () => answer(option),
-      style: OutlinedButton.styleFrom(
-        minimumSize: const Size(0, 58),
-        textStyle: answerLabelStyle,
-        foregroundColor: ink,
-        backgroundColor: canRetry
-            ? const Color(0xfff3f5ff)
-            : const Color(0xeafffbef),
-        overlayColor: blue.withValues(alpha: 0.14),
-        disabledForegroundColor: wrong
-            ? const Color(0xffa33830)
-            : const Color(0xff62564c),
-        disabledBackgroundColor: wrong
-            ? const Color(0xffffe1dc)
-            : const Color(0xbffffbef),
-        side: BorderSide(
-          color: wrong
+    final labelSize = MediaQuery.textScalerOf(context).scale(answerLabelSize);
+    final button = SizedBox(
+      height: (labelSize + 22).clamp(58.0, 80.0),
+      child: OutlinedButton(
+        onPressed: wrong || locked ? null : () => answer(option),
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size(0, 58),
+          textStyle: answerLabelStyle,
+          foregroundColor: ink,
+          backgroundColor: canRetry
+              ? const Color(0xfff3f5ff)
+              : const Color(0xeafffbef),
+          overlayColor: blue.withValues(alpha: 0.14),
+          disabledForegroundColor: wrong
               ? const Color(0xffa33830)
-              : canRetry
-              ? blue
-              : ink,
-          width: canRetry ? 1.6 : 1,
+              : const Color(0xff62564c),
+          disabledBackgroundColor: wrong
+              ? const Color(0xffffe1dc)
+              : const Color(0xbffffbef),
+          side: BorderSide(
+            color: wrong
+                ? const Color(0xffa33830)
+                : canRetry
+                ? blue
+                : ink,
+            width: canRetry ? 1.6 : 1,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
         ),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 16,
-            child: wrong
-                ? const Icon(
-                    Icons.close_rounded,
-                    key: ValueKey('wrong-choice-mark'),
-                    size: 15,
-                    semanticLabel: '오답',
-                  )
-                : null,
-          ),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final style = DefaultTextStyle.of(context).style;
-                final text = Text(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: wrong ? 16 : 2),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
                   option,
-                  style: style,
                   textAlign: TextAlign.center,
-                  maxLines: wrapLabel ? 2 : 1,
-                  softWrap: wrapLabel,
-                );
-                var labelWidth = constraints.maxWidth;
-                if (wrapLabel && labelWidth > 0) {
-                  final painter = TextPainter(
-                    text: TextSpan(text: option, style: style),
-                    textDirection: Directionality.of(context),
-                    textScaler: MediaQuery.textScalerOf(context),
-                    maxLines: 2,
-                  )..layout(maxWidth: labelWidth);
-                  if (painter.didExceedMaxLines) {
-                    var low = labelWidth;
-                    var high = painter.maxIntrinsicWidth.ceilToDouble();
-                    while (high - low > 1) {
-                      final width = (high + low) / 2;
-                      painter.layout(maxWidth: width);
-                      if (painter.didExceedMaxLines) {
-                        low = width;
-                      } else {
-                        high = width;
-                      }
-                    }
-                    labelWidth = high;
-                  }
-                  painter.dispose();
-                }
-                return FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: wrapLabel
-                      ? ConstrainedBox(
-                          constraints: BoxConstraints(maxWidth: labelWidth),
-                          child: text,
-                        )
-                      : text,
-                );
-              },
+                  maxLines: 1,
+                  softWrap: false,
+                ),
+              ),
             ),
-          ),
-          const SizedBox(width: 16),
-        ],
+            if (wrong)
+              const Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                child: Icon(
+                  Icons.close_rounded,
+                  key: ValueKey('wrong-choice-mark'),
+                  size: 15,
+                  semanticLabel: '오답',
+                ),
+              ),
+          ],
+        ),
       ),
     );
     if (!wrong || MediaQuery.disableAnimationsOf(context)) return button;

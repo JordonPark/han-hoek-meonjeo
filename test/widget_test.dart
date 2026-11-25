@@ -831,16 +831,45 @@ void main() {
       expect(tester.getSize(skip).height, greaterThanOrEqualTo(48));
       expect(tester.getBottomLeft(skip).dy, lessThan(844));
       final original = List<String>.of(game.options as List<String>);
+      for (final screenshotOptions in const [
+        ['비행기', '잠수함', '물고기', '고속 보트'],
+        ['막대 아이스크림', '편지 봉투', '정사각형', '숟가락'],
+      ]) {
+        game.setState(() => game.options = screenshotOptions);
+        await tester.pump();
+        final screenshotButtons = [
+          for (final option in screenshotOptions)
+            find.widgetWithText(OutlinedButton, option),
+        ];
+        expect(
+          tester.getTopLeft(screenshotButtons[0]).dy,
+          tester.getTopLeft(screenshotButtons[1]).dy,
+        );
+        expect(
+          tester.getTopLeft(screenshotButtons[2]).dy,
+          tester.getTopLeft(screenshotButtons[3]).dy,
+        );
+        expect({
+          for (final button in screenshotButtons) tester.getSize(button),
+        }, hasLength(1));
+        for (final option in screenshotOptions) {
+          final label = find.text(option);
+          expect(tester.widget<Text>(label).maxLines, 1);
+          expect(tester.widget<Text>(label).softWrap, isFalse);
+          expect(
+            tester.renderObject<RenderParagraph>(label).didExceedMaxLines,
+            isFalse,
+          );
+        }
+      }
       const longOption = '아주 긴 제시어가 들어간 보기';
       game.setState(() => game.options = [longOption, ...original.skip(1)]);
       await tester.pump();
       final longText = find.text(longOption);
-      expect(tester.widget<Text>(longText).maxLines, 2);
+      expect(tester.widget<Text>(longText).maxLines, 1);
       expect(
         tester.renderObject<RenderParagraph>(longText).didExceedMaxLines,
         isFalse,
-        reason:
-            '${tester.renderObject<RenderParagraph>(longText).size} ${tester.getSize(find.widgetWithText(OutlinedButton, longOption))} ${tester.renderObject<RenderParagraph>(longText).text.style}',
       );
       final longChoice = tester.widget<OutlinedButton>(
         find.widgetWithText(OutlinedButton, longOption),
