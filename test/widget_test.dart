@@ -331,7 +331,7 @@ void main() {
       await tester.tap(find.widgetWithText(OutlinedButton, wrong));
       await tester.pump();
       expect(find.text('틀렸어요'), findsOneWidget);
-      expect(find.text('다른 보기 잠시 대기'), findsOneWidget);
+      expect(find.text('곧 다시 고를 수 있어요'), findsOneWidget);
       final retryProgress = find.byKey(const ValueKey('retry-wait-progress'));
       expect(
         tester.widget<LinearProgressIndicator>(retryProgress).value,
@@ -351,7 +351,7 @@ void main() {
       game.setState(() => game.lockedUntil = (game.elapsed as int) - 1);
       await tester.pump();
       expect(retryProgress, findsNothing);
-      expect(find.text('다른 보기를 골라 보세요'), findsOneWidget);
+      expect(find.text('이제 다른 보기를 눌러 보세요'), findsOneWidget);
       expect(
         tester
             .widget<OutlinedButton>(find.widgetWithText(OutlinedButton, answer))
@@ -366,8 +366,16 @@ void main() {
             .onPressed,
         isNull,
       );
+      final retryChoice = tester.widget<OutlinedButton>(
+        find.widgetWithText(OutlinedButton, answer),
+      );
+      expect(retryChoice.style?.side?.resolve({})?.color, blue);
+      game.setState(() => game.lockedUntil = (game.elapsed as int) - 1500);
+      await tester.pump();
+      expect(find.text('이제 다른 보기를 눌러 보세요'), findsOneWidget);
       await tester.tap(find.widgetWithText(OutlinedButton, answer));
       await tester.pump();
+      expect(find.text('이제 다른 보기를 눌러 보세요'), findsNothing);
       expect(game.deadlineMs, roundStartMs + correctBonusMs);
       expect(find.text('+1초'), findsOneWidget);
       await tester.pump(const Duration(milliseconds: 160));

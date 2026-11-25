@@ -1345,13 +1345,23 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           ),
         ),
       );
+      final answerTime = elapsed;
+      final answersLocked = answerTime < lockedUntil;
+      final retryReady = disabled.isNotEmpty && !answersLocked;
       final answers = Column(
         children: [
           if (singleColumn)
             for (final option in options)
               Padding(
                 padding: const EdgeInsets.only(bottom: 10),
-                child: SizedBox(width: double.infinity, child: choice(option)),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: choice(
+                    option,
+                    locked: answersLocked,
+                    retryReady: retryReady,
+                  ),
+                ),
               )
           else
             for (var row = 0; row < 2; row++) ...[
@@ -1359,13 +1369,26 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 children: [
                   for (var column = 0; column < 2; column++) ...[
                     if (column == 1) const SizedBox(width: 12),
-                    Expanded(child: choice(options[row * 2 + column])),
+                    Expanded(
+                      child: choice(
+                        options[row * 2 + column],
+                        locked: answersLocked,
+                        retryReady: retryReady,
+                      ),
+                    ),
                   ],
                 ],
               ),
               SizedBox(height: row == 0 ? 10 : 4),
             ],
-          SizedBox(height: largeText ? 42 : 28, child: answerFeedback()),
+          SizedBox(
+            height: largeText ? 42 : 28,
+            child: answerFeedback(
+              answerTime,
+              locked: answersLocked,
+              retryReady: retryReady,
+            ),
+          ),
           skipButton(),
         ],
       );
@@ -1393,13 +1416,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     },
   );
 
-  Widget answerFeedback() {
+  Widget answerFeedback(
+    int now, {
+    required bool locked,
+    required bool retryReady,
+  }) {
     const wrongColor = Color(0xffa33830);
     const neutral = Color(0xff594b3e);
-    final now = elapsed;
     final nextDrawingAt = advanceAfterWrongAt;
     Widget? message;
-    if (now < lockedUntil) {
+    if (locked) {
       final end = nextDrawingAt ?? lockedUntil;
       final duration = nextDrawingAt != null
           ? lastWrongTransitionMs
@@ -1413,7 +1439,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           title('틀렸어요', size: 14, color: wrongColor),
           const SizedBox(width: 6),
           Text(
-            nextDrawingAt == null ? '다른 보기 잠시 대기' : '다음 그림 준비 중',
+            nextDrawingAt == null ? '곧 다시 고를 수 있어요' : '다음 그림 준비 중',
             style: const TextStyle(fontSize: 13, color: neutral),
           ),
           const SizedBox(width: 7),
@@ -1432,8 +1458,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           ),
         ],
       );
-    } else if (disabled.isNotEmpty && now < lockedUntil + 1200) {
-      message = title('다른 보기를 골라 보세요', size: 14, color: blue);
+    } else if (retryReady) {
+      message = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.keyboard_arrow_up_rounded, size: 19, color: blue),
+          const SizedBox(width: 3),
+          title('이제 다른 보기를 눌러 보세요', size: 14, color: blue),
+        ],
+      );
     } else if (now < streakVisibleUntil && correctStreak >= 3) {
       message = Row(
         mainAxisSize: MainAxisSize.min,
@@ -1522,15 +1555,22 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget choice(String option) {
+  Widget choice(
+    String option, {
+    required bool locked,
+    required bool retryReady,
+  }) {
     final wrong = disabled.contains(option);
+    final canRetry = retryReady && !wrong;
     final button = OutlinedButton(
-      onPressed: wrong || elapsed < lockedUntil ? null : () => answer(option),
+      onPressed: wrong || locked ? null : () => answer(option),
       style: OutlinedButton.styleFrom(
         minimumSize: const Size(0, 58),
         textStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
         foregroundColor: ink,
-        backgroundColor: const Color(0xeafffbef),
+        backgroundColor: canRetry
+            ? const Color(0xfff3f5ff)
+            : const Color(0xeafffbef),
         overlayColor: blue.withValues(alpha: 0.14),
         disabledForegroundColor: wrong
             ? const Color(0xffa33830)
@@ -1538,7 +1578,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         disabledBackgroundColor: wrong
             ? const Color(0xffffe1dc)
             : const Color(0xbffffbef),
-        side: BorderSide(color: wrong ? const Color(0xffa33830) : ink),
+        side: BorderSide(
+          color: wrong
+              ? const Color(0xffa33830)
+              : canRetry
+              ? blue
+              : ink,
+          width: canRetry ? 1.6 : 1,
+        ),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
       ),
