@@ -15,16 +15,24 @@ const blue = Color(0xff2544c4);
 const paper = Color(0xfffff6e3);
 const ink = Color(0xff31271c);
 const paperTexture = AssetImage('assets/wrinkled-paper.webp');
+const roundStartMs = 60000;
+const correctBonusMs = 1000;
+const skipPenaltyMs = 3000;
 
 double strokeProgressAt({
   required int elapsedMs,
   required int questionStartedMs,
   required int level,
 }) {
-  final end = elapsedMs.clamp(0, 60000);
+  final end = max(0, elapsedMs);
   final start = questionStartedMs.clamp(0, end);
-  // Integrate a linear increase from 1× to 2× over the round.
-  final drawingTime = (end - start) * (1 + (start + end) / 120000);
+  // Speed reaches 2× at 60 seconds and stays there during bonus time.
+  double distanceAt(int elapsed) {
+    final ramp = min(elapsed, roundStartMs);
+    return ramp * (1 + ramp / (2 * roundStartMs)) + 2 * (elapsed - ramp);
+  }
+
+  final drawingTime = distanceAt(end) - distanceAt(start);
   return (drawingTime / (1700 + level * 1050)).clamp(0.0, 1.0);
 }
 
@@ -142,6 +150,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int best = 0;
   int level = 1;
   int questionAt = 0;
+  int deadlineMs = roundStartMs;
+  int timeFeedbackUntil = 0;
+  String? timeFeedback;
   int lockedUntil = 0;
   int? advanceAfterWrongAt;
   int countdown = 3;
@@ -166,7 +177,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         questionStartedMs: questionAt,
         level: level,
       );
-  int get seconds => ((60000 - elapsed).clamp(0, 60000) / 1000).ceil();
+  int get remainingMs => max(0, deadlineMs - elapsed);
+  int get seconds => (remainingMs / 1000).ceil();
   bool get playing => phase == Phase.playing;
 
   @override
@@ -362,6 +374,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       missed.clear();
       deck = List<Prompt>.of(pack)..shuffle(random);
       clock.reset();
+      deadlineMs = roundStartMs;
+      timeFeedbackUntil = 0;
+      timeFeedback = null;
       round++;
       generated.clear();
       aiRound = sketchFlow != null;
@@ -397,7 +412,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void tick() {
     if (!mounted || !playing) return;
-    if (elapsed >= 60000) {
+    if (remainingMs == 0) {
       finish();
     } else {
       setState(() {
@@ -476,7 +491,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void answer(String option) {
     if (!playing) return;
-    if (elapsed >= 60000) {
+    if (remainingMs == 0) {
       finish();
       return;
     }
@@ -485,6 +500,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (option == prompt!.label) {
         audio.play(GameSound.correct);
         score++;
+        deadlineMs += correctBonusMs;
+        timeFeedback = '+1초';
+        timeFeedbackUntil = elapsed + 1150;
         nextQuestion(skipped: false);
       } else {
         unawaited(HapticFeedback.mediumImpact());
@@ -500,12 +518,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void skip() {
     if (!playing) return;
-    if (elapsed >= 60000) {
+    if (remainingMs == 0) {
       finish();
       return;
     }
     if (!canSkip) return;
+    deadlineMs -= skipPenaltyMs;
+    if (remainingMs == 0) {
+      finish();
+      return;
+    }
     setState(() {
+      timeFeedback = '−3초';
+      timeFeedbackUntil = elapsed + 1150;
       missed.add((prompt!.label, drawing));
       nextQuestion(skipped: true);
     });
@@ -513,7 +538,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void finish() {
     if (!playing) return;
-    if (elapsed >= 60000 && prompt != null) {
+    if (remainingMs == 0 && prompt != null) {
       missed.add((prompt!.label, drawing));
     }
     refresh?.cancel();
@@ -893,10 +918,27 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             child: FittedBox(
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
-              child: title(
-                timer,
-                size: 35,
-                color: seconds <= 10 ? Colors.red.shade800 : ink,
+              child: Row(
+                children: [
+                  title(
+                    timer,
+                    size: 35,
+                    color: seconds <= 10 ? Colors.red.shade800 : ink,
+                  ),
+                  if (timeFeedback != null && elapsed < timeFeedbackUntil) ...[
+                    const SizedBox(width: 6),
+                    Semantics(
+                      liveRegion: true,
+                      child: title(
+                        timeFeedback!,
+                        size: 15,
+                        color: timeFeedback == '+1초'
+                            ? const Color(0xff226548)
+                            : const Color(0xffa33830),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           ),
@@ -951,7 +993,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           ),
           TextButton(
             onPressed: canSkip ? skip : null,
-            child: const Text('건너뛰기', style: TextStyle(fontSize: 17)),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xff594b3e),
+            ),
+            child: const Text('건너뛰기 · −3초', style: TextStyle(fontSize: 14)),
           ),
         ],
       );

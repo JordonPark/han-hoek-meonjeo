@@ -107,6 +107,7 @@ void main() {
       inInclusiveRange(0.0, 0.001),
     );
     expect(progress(60000, 50000), 1);
+    expect(progress(62000, 61000), progress(63000, 62000));
   });
   testWidgets(
     'starts an offline round with four options and skipping initially disabled',
@@ -178,7 +179,7 @@ void main() {
       expect(find.text('게임 시작!'), findsOneWidget);
       expect(find.text('01:00'), findsNothing);
       await tester.pump(const Duration(milliseconds: 450));
-      final skip = find.widgetWithText(TextButton, '건너뛰기');
+      final skip = find.widgetWithText(TextButton, '건너뛰기 · −3초');
       expect(find.text('01:00'), findsOneWidget);
       expect(find.byType(OutlinedButton), findsNWidgets(4));
       expect(tester.widget<TextButton>(skip).onPressed, isNull);
@@ -223,6 +224,12 @@ void main() {
             .every((button) => button.onPressed == null),
         isTrue,
       );
+      game.setState(() => game.lockedUntil = 0);
+      await tester.pump();
+      await tester.tap(find.widgetWithText(OutlinedButton, answer));
+      await tester.pump();
+      expect(game.deadlineMs, roundStartMs + correctBonusMs);
+      expect(find.text('+1초'), findsOneWidget);
       game.finish();
       tester.view.physicalSize = const Size(390, 844);
       await tester.pump();
