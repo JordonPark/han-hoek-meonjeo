@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -39,6 +41,140 @@ void main() {
       expect([...choices.similar, ...choices.distinct], isNot(contains('mug')));
     }
   });
+
+  test(
+    'level four uses related choices and level five favors the actual outline',
+    () {
+      List<String> choices(int level) => quizDistractors(
+        answer: 'firetruck',
+        candidates: {
+          'firetruck',
+          'ambulance',
+          'truck',
+          'bus',
+          'tractor',
+          'bulldozer',
+          'train',
+          'van',
+          'school bus',
+          'police car',
+        },
+        ranked: [
+          'ambulance',
+          'truck',
+          'train',
+          'school bus',
+          'van',
+          'police car',
+        ],
+        outlineRanked: [
+          'ambulance',
+          'truck',
+          'police car',
+          'train',
+          'van',
+          'school bus',
+        ],
+        indistinguishable: {'train'},
+        level: level,
+        random: Random(1),
+      ).similar;
+
+      expect(choices(4), unorderedEquals(['bus', 'tractor', 'bulldozer']));
+      expect(choices(5), unorderedEquals(['police car', 'van', 'school bus']));
+    },
+  );
+
+  test('AI silhouettes select the matching stored outline reference', () {
+    final vertical = [
+      [const Offset(.5, .1), const Offset(.5, .9)],
+    ];
+    final horizontal = [
+      [const Offset(.1, .5), const Offset(.9, .5)],
+    ];
+    final leftToRight = [
+      [const Offset(.9, .5), const Offset(.1, .5)],
+    ];
+    expect(closestQuizOutline(leftToRight, [vertical, horizontal]), 1);
+  });
+
+  test('every shipped outline can supply three eligible choices at all five levels', () {
+    Map readAsset(String name) =>
+        jsonDecode(File('assets/$name.json').readAsStringSync()) as Map;
+    final outlines = readAsset('outline_questions');
+    final related = readAsset('related_questions');
+    final candidates = outlines.keys.cast<String>().toSet();
+    final random = Random(1);
+    expect(candidates, hasLength(345));
+    for (final answer in candidates) {
+      final row = outlines[answer] as Map;
+      final visual = row['visualByDrawing'] as List;
+      final ambiguous = row['ambiguousByDrawing'] as List;
+      expect(visual, hasLength(6));
+      for (final (index, ranks) in visual.indexed) {
+        final blocked = (ambiguous[index] as List).cast<String>().toSet();
+        for (var level = 1; level <= 5; level++) {
+          final choices = quizDistractors(
+            answer: answer,
+            candidates: candidates,
+            ranked: (related[answer] as List).cast<String>(),
+            outlineRanked: (ranks as List).cast<String>(),
+            indistinguishable: blocked,
+            level: level,
+            random: random,
+          );
+          final distinct = {...choices.similar, ...choices.distinct};
+          final reason = '$answer drawing $index level $level';
+          expect(distinct, hasLength(3), reason: reason);
+          expect(
+            distinct.intersection({answer, ...blocked}),
+            isEmpty,
+            reason: reason,
+          );
+        }
+      }
+    }
+  });
+
+  test(
+    'history records opening, promotion, skips and assistance separately',
+    () {
+      Map<String, Object?> row(
+        int level,
+        QuizOutcome outcome, {
+        String id = 'firetruck',
+        bool assisted = false,
+      }) => QuizResult(
+        level: level,
+        questionId: id,
+        generated: false,
+        assisted: assisted,
+        outcome: outcome,
+        wrongTaps: 0,
+        firstTapMs: outcome == QuizOutcome.skipped ? 8000 : 1000,
+        durationMs: 8000,
+      ).toJson();
+
+      final history = QuizBalanceHistory([
+        jsonEncode({
+          'questions': [
+            row(1, QuizOutcome.correct, id: 'apple'),
+            row(1, QuizOutcome.correct, id: 'banana'),
+            row(2, QuizOutcome.skipped),
+            row(2, QuizOutcome.skipped),
+            row(1, QuizOutcome.correct, assisted: true, id: 'fish'),
+            row(2, QuizOutcome.skipped),
+            row(2, QuizOutcome.wrong),
+          ],
+        }),
+      ]);
+      expect(history.openingSummary, '정답 1/1 · 첫 선택 1.0초 · 건너뛰기 0%');
+      expect(history.promotedSummary(2), '정답 0/1 · 첫 선택 — · 건너뛰기 100%');
+      expect(history.assistedSummary(1), '정답 1/1 · 첫 선택 1.0초 · 건너뛰기 0%');
+      expect(history.tooHardForEarlyLevels('firetruck'), isTrue);
+      expect(history.tooHardForEarlyLevels('fish'), isFalse);
+    },
+  );
 
   test(
     'drawing validation rejects obvious jumps but accepts a resampled line',

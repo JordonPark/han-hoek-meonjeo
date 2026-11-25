@@ -3,13 +3,14 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageDraw
 root = pathlib.Path(sys.argv[1])
+categories = sys.argv[2:] or ['rabbit', 'firetruck']
 config = json.loads((root / 'sketchflow.json').read_text())
 options = ort.SessionOptions()
 options.intra_op_num_threads = 3
 session = ort.InferenceSession(str(root / 'sketchflow.onnx'), sess_options=options, providers=['CPUExecutionProvider'])
-gallery = Image.new('RGB', (900, 600), '#fff7e8')
+gallery = Image.new('RGB', (900, 300 * len(categories)), '#fff7e8')
 canvas = ImageDraw.Draw(gallery)
-for row, category in enumerate(['rabbit', 'firetruck']):
+for row, category in enumerate(categories):
     condition = np.array([config['conditions'][category]], dtype=np.float32)
     for column, seed in enumerate([1,2,3]):
         rng = np.random.default_rng(seed)

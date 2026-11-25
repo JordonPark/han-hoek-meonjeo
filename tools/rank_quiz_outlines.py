@@ -55,10 +55,19 @@ def main():
         own = scores[:, i].copy()
         scores[:, i] = 0
         opening = int(np.argmax(own - scores.max(axis=1) + vectors[i] @ prototypes[i] * .4))
-        result[label] = {'similar': neighbors, 'opening': opening}
         complete = vectors[i] @ prototypes.T
         own_complete = complete[:, i].copy()
         complete[:, i] = 0
+        sample_neighbors = pairs[i].max(axis=-1)
+        visual = []
+        ambiguous = []
+        for sample, scores_by_label in enumerate(sample_neighbors):
+            order = [j for j in np.argsort(-scores_by_label, kind='stable') if j != i]
+            visual.append([labels[j] for j in order[:12]])
+            ambiguous.append([labels[j] for j in order
+                              if scores_by_label[j] >= max(.90, own_complete[sample] + .05)])
+        result[label] = {'similar': neighbors, 'opening': opening,
+                         'visualByDrawing': visual, 'ambiguousByDrawing': ambiguous}
         review.append([
             label, labels_ko[label], opening + 1,
             f'{own[opening] - scores[opening].max():.3f}',

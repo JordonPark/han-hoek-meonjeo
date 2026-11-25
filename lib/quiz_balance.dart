@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
+import 'dart:ui' show Offset;
 
 int quizLevel(int score, {bool assistance = false}) =>
     max(1, min(5, 1 + score ~/ 2) - (assistance ? 1 : 0));
@@ -106,10 +107,21 @@ const familiarQuestions = {
   'whale',
 };
 
+// Zero-based indices in questions.json. Each reviewed sample shows the
+// distinguishing feature that was repeatedly missing in the AI review.
+const reviewedStoredQuestions = {
+  'firetruck': [3, 5],
+  'ambulance': [3, 4],
+  'key': [4, 5],
+  'golf club': [0, 2],
+  'fish': [3, 2],
+  'umbrella': [2, 0],
+};
+
 const _curated = <String, List<String>>{
   'apple': ['pear', 'onion', 'potato', 'peanut'],
   'cat': ['rabbit', 'dog', 'raccoon', 'tiger'],
-  'firetruck': ['ambulance', 'bus', 'truck'],
+  'firetruck': ['bus', 'tractor', 'bulldozer'],
   'fish': ['shark', 'dolphin', 'whale'],
   'golf club': ['hockey stick', 'baseball bat', 'tennis racquet'],
   'hamburger': ['sandwich', 'hot dog', 'cookie'],
@@ -134,6 +146,11 @@ const _confusable = [
   {'trumpet', 'trombone'},
   {'cell phone', 'remote control', 'calculator'},
   {'floor lamp', 'streetlight'},
+  {'firetruck', 'ambulance', 'truck'},
+  {'golf club', 'hockey stick', 'baseball bat'},
+  {'basketball', 'baseball', 'soccer ball', 'hockey puck'},
+  {'stove', 'oven', 'microwave', 'toaster'},
+  {'circle', 'donut'},
 ];
 
 ({List<String> similar, List<String> distinct}) quizDistractors({
@@ -141,10 +158,11 @@ const _confusable = [
   required Set<String> candidates,
   required List<String> ranked,
   List<String> outlineRanked = const [],
+  Set<String> indistinguishable = const {},
   required int level,
   required Random random,
 }) {
-  final eligible = candidates.difference({answer});
+  final eligible = candidates.difference({answer, ...indistinguishable});
   for (final group in _confusable) {
     if (group.contains(answer)) eligible.removeAll(group);
   }
@@ -154,27 +172,67 @@ const _confusable = [
   final related = ranked.where(eligible.contains).toSet()..removeAll(curated);
   final outline = outlineRanked.where(eligible.contains).toSet();
   final count = (level - 1).clamp(0, 3);
-  final closest = ranked.where(eligible.contains).take(10).toList()
-    ..shuffle(random);
+  final semantic = {...curated, ...related};
+  final closeOutlines = outline.take(6).toSet();
+  final sameKind =
+      semantic.where((id) => !closeOutlines.contains(id)).take(8).toList()
+        ..shuffle(random);
   final similar = (switch (level) {
-    5 => {
-      ...outline.where((id) => related.contains(id) || curated.contains(id)),
-      ...outline,
-      ...closest,
-    },
-    4 => {...closest, ...curated},
-    _ => {...curated, ...closest},
+    5 => {...outline.where(semantic.contains), ...outline, ...semantic},
+    4 => {...sameKind, ...semantic},
+    _ => {...curated, ...sameKind, ...semantic},
   }).take(count).toList();
-  final distinct =
-      (eligible
-              .difference(curated)
-              .difference(related)
-              .difference(similar.toSet())
-              .toList()
-            ..shuffle(random))
-          .take(3 - similar.length)
-          .toList();
+  final remaining = eligible.difference(similar.toSet());
+  final unrelated =
+      remaining.difference(semantic).difference(closeOutlines).toList()
+        ..shuffle(random);
+  final distinct = {
+    ...unrelated,
+    ...remaining,
+  }.take(3 - similar.length).toList();
   return (similar: similar, distinct: distinct);
+}
+
+int closestQuizOutline(
+  List<List<Offset>> drawing,
+  List<List<List<Offset>>> references,
+) {
+  final cells = _outlineCells(drawing);
+  var bestIndex = 0;
+  var bestSimilarity = -1.0;
+  for (final (index, reference) in references.indexed) {
+    final other = _outlineCells(reference);
+    final overlap = cells.intersection(other).length;
+    final similarity = overlap / max(1, cells.length + other.length - overlap);
+    if (similarity > bestSimilarity) {
+      bestIndex = index;
+      bestSimilarity = similarity;
+    }
+  }
+  return bestIndex;
+}
+
+Set<int> _outlineCells(List<List<Offset>> strokes) {
+  const size = 12;
+  final cells = <int>{};
+  void mark(Offset point) {
+    final x = (point.dx * size).floor().clamp(0, size - 1);
+    final y = (point.dy * size).floor().clamp(0, size - 1);
+    cells.add(y * size + x);
+  }
+
+  for (final stroke in strokes) {
+    mark(stroke.first);
+    for (var i = 1; i < stroke.length; i++) {
+      final start = stroke[i - 1];
+      final end = stroke[i];
+      final steps = max(1, ((end - start).distance * size * 2).ceil());
+      for (var step = 1; step <= steps; step++) {
+        mark(start + (end - start) * (step / steps));
+      }
+    }
+  }
+  return cells;
 }
 
 enum QuizOutcome { correct, wrong, skipped, timeUp }
@@ -220,6 +278,8 @@ class QuizBalanceHistory {
     for (final round in rounds) {
       try {
         final questions = (jsonDecode(round) as Map)['questions'] as List;
+        var score = 0;
+        var previousScore = 0;
         for (final row in questions.whereType<Map>()) {
           final level = row['level'];
           final ai = row['generated'];
@@ -227,16 +287,26 @@ class QuizBalanceHistory {
           if (level is! int || ai is! bool || duration is! int) continue;
           final outcome = row['outcome'];
           final correct = outcome == QuizOutcome.correct.name;
-          final firstTap = row['firstTapMs'];
-          final progress = row['firstTapProgress'];
+          final skipped = outcome == QuizOutcome.skipped.name;
+          // Older versions counted a skip without an answer as a first tap.
+          final skipWasFirst = skipped && row['wrongTaps'] == 0;
+          final firstTap = skipWasFirst ? null : row['firstTapMs'];
+          final progress = skipWasFirst ? null : row['firstTapProgress'];
+          final firstChoiceMs = firstTap is int ? firstTap : null;
           final id = row['questionId'];
           final totals = _byLevel.putIfAbsent((level, ai), _QuizTotals.new);
-          totals.add(
-            correct,
-            duration,
-            outcome == QuizOutcome.skipped.name,
-            firstTap is int ? firstTap : null,
-          );
+          totals.add(correct, duration, skipped, firstChoiceMs);
+          if (identical(row, questions.first)) {
+            _opening.add(correct, duration, skipped, firstChoiceMs);
+          }
+          if (quizLevel(previousScore) < quizLevel(score) &&
+              level == quizLevel(score)) {
+            _promoted
+                .putIfAbsent(level, _QuizTotals.new)
+                .add(correct, duration, skipped, firstChoiceMs);
+          }
+          previousScore = score;
+          if (correct) score++;
           if (progress is num) {
             totals.knownProgress++;
             if (progress < 1) totals.beforeFinish++;
@@ -244,17 +314,12 @@ class QuizBalanceHistory {
           if (row['assisted'] == true) {
             _assisted
                 .putIfAbsent(level, _QuizTotals.new)
-                .add(correct, duration, false, null);
+                .add(correct, duration, skipped, firstChoiceMs);
           }
           if (id is String && outcome != QuizOutcome.timeUp.name) {
             _byQuestion
                 .putIfAbsent((id, level, ai), _QuizTotals.new)
-                .add(
-                  correct,
-                  duration,
-                  outcome == QuizOutcome.skipped.name,
-                  firstTap is int ? firstTap : null,
-                );
+                .add(correct, duration, skipped, firstChoiceMs);
           }
         }
       } on FormatException {
@@ -268,6 +333,8 @@ class QuizBalanceHistory {
   final _byLevel = <(int, bool), _QuizTotals>{};
   final _byQuestion = <(String, int, bool), _QuizTotals>{};
   final _assisted = <int, _QuizTotals>{};
+  final _promoted = <int, _QuizTotals>{};
+  final _opening = _QuizTotals();
 
   bool prefersStored(String id, int level) {
     final ai = _byQuestion[(id, level, true)];
@@ -280,27 +347,47 @@ class QuizBalanceHistory {
         stored.correctRate - ai.correctRate >= 0.5;
   }
 
+  bool tooHardForEarlyLevels(String id) {
+    var attempts = 0;
+    var correct = 0;
+    var skips = 0;
+    for (final level in [1, 2]) {
+      for (final generated in [true, false]) {
+        final totals = _byQuestion[(id, level, generated)];
+        if (totals == null) continue;
+        attempts += totals.questions;
+        correct += totals.correct;
+        skips += totals.skips;
+      }
+    }
+    return attempts >= 4 && (correct * 2 < attempts || skips * 2 >= attempts);
+  }
+
   bool hasLevel(int level) =>
       _byLevel.containsKey((level, true)) ||
       _byLevel.containsKey((level, false));
 
-  String? assistedSummary(int level) {
-    final totals = _assisted[level];
-    return totals == null
-        ? null
-        : '난이도 완화 후 정답 ${totals.correct}/${totals.questions}';
-  }
+  String? get openingSummary =>
+      _opening.questions == 0 ? null : _opening.summary;
 
-  List<({String id, int level, bool generated, int correct, int total})>
+  String? assistedSummary(int level) => _assisted[level]?.summary;
+
+  String? promotedSummary(int level) => _promoted[level]?.summary;
+
+  List<
+    ({String id, int level, bool generated, int correct, int skips, int total})
+  >
   reviewCandidates() {
     final ranked =
         _byQuestion.entries
             .where(
               (entry) =>
-                  entry.value.questions >= 6 && entry.value.correctRate < 0.5,
+                  entry.value.questions >= 6 &&
+                  (entry.value.correctRate < 0.5 ||
+                      entry.value.skipRate >= 0.5),
             )
             .toList()
-          ..sort((a, b) => a.value.correctRate.compareTo(b.value.correctRate));
+          ..sort((a, b) => b.value.skipRate.compareTo(a.value.skipRate));
     return ranked.take(5).map((entry) {
       final (id, level, generated) = entry.key;
       return (
@@ -308,6 +395,7 @@ class QuizBalanceHistory {
         level: level,
         generated: generated,
         correct: entry.value.correct,
+        skips: entry.value.skips,
         total: entry.value.questions,
       );
     }).toList();
@@ -320,13 +408,11 @@ class QuizBalanceHistory {
     final correctTime = totals.correct == 0
         ? '—'
         : '${(totals.correctMs / totals.correct / 1000).toStringAsFixed(1)}초';
-    final firstTap = totals.firstTaps == 0
-        ? '—'
-        : '${(totals.firstTapMs / totals.firstTaps / 1000).toStringAsFixed(1)}초';
     final early = totals.knownProgress == 0
         ? ''
         : ' · 완성 전 선택 ${totals.beforeFinish}/${totals.knownProgress}';
-    return '${totals.questions}문제 · 정답률 $percent% · 정답까지 $correctTime\n첫 선택 $firstTap · 건너뛰기 ${totals.skips}회$early';
+    return '${totals.questions}문제 · 정답률 $percent% · 정답까지 $correctTime\n'
+        '첫 선택 ${totals.firstChoiceTime} · 건너뛰기 ${totals.skipPercent}%$early';
   }
 }
 
@@ -341,6 +427,13 @@ class _QuizTotals {
   int beforeFinish = 0;
 
   double get correctRate => correct / questions;
+  double get skipRate => skips / questions;
+  int get skipPercent => (100 * skipRate).round();
+  String get firstChoiceTime => firstTaps == 0
+      ? '—'
+      : '${(firstTapMs / firstTaps / 1000).toStringAsFixed(1)}초';
+  String get summary =>
+      '정답 $correct/$questions · 첫 선택 $firstChoiceTime · 건너뛰기 $skipPercent%';
 
   void add(bool solved, int duration, bool skipped, int? firstTap) {
     questions++;

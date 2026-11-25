@@ -161,6 +161,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   Map<String, String> labelsById = {};
   Map<String, List<String>> relatedById = {};
   Map<String, List<String>> outlinesById = {};
+  Map<String, List<({List<String> ranked, Set<String> ambiguous})>>
+  drawingOutlinesById = {};
   Map<String, int> openingDrawingById = {};
   final roundResults = <QuizResult>[];
   QuizBalanceHistory balanceHistory = QuizBalanceHistory(const []);
@@ -309,8 +311,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> prepareDrawing(Prompt selected) async {
-    if (generated.containsKey(selected.id)) return;
+  Future<void> prepareDrawing(Prompt selected, int nextLevel) async {
+    if (generated.containsKey(selected.id) ||
+        usesStoredDrawing(selected.id, nextLevel)) {
+      return;
+    }
     final generation = round;
     final job = sketchFlow?.prepare(selected.id);
     if (job == null) return;
@@ -365,19 +370,41 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         await rootBundle.loadString('assets/outline_questions.json'),
       ) as Map;
       final visualRanks = <String, List<String>>{};
+      final drawingRanks =
+          <String, List<({List<String> ranked, Set<String> ambiguous})>>{};
       final openingDrawings = <String, int>{};
       for (final question in loaded) {
         final row = outlines[question.id] as Map;
         final similar = (row['similar'] as List).cast<String>();
+        final byDrawing = (row['visualByDrawing'] as List).cast<List>();
+        final ambiguous = (row['ambiguousByDrawing'] as List).cast<List>();
         final opening = row['opening'] as int;
+        final reviewed = reviewedStoredQuestions[question.id];
         if (similar.toSet().length != 24 ||
             similar.contains(question.id) ||
             !similar.every(labels.containsKey) ||
+            byDrawing.length != question.drawings.length ||
+            ambiguous.length != question.drawings.length ||
+            (reviewed != null &&
+                reviewed.any(
+                  (index) => index < 0 || index >= question.drawings.length,
+                )) ||
+            ![...byDrawing, ...ambiguous].every(
+              (ids) =>
+                  !ids.contains(question.id) && ids.every(labels.containsKey),
+            ) ||
             opening < 0 ||
             opening >= question.drawings.length) {
           throw const FormatException('Invalid quiz outlines');
         }
         visualRanks[question.id] = similar;
+        drawingRanks[question.id] = List.generate(
+          byDrawing.length,
+          (index) => (
+            ranked: byDrawing[index].cast<String>(),
+            ambiguous: ambiguous[index].cast<String>().toSet(),
+          ),
+        );
         openingDrawings[question.id] = opening;
       }
       if (ranked.length != labels.length ||
@@ -396,6 +423,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           labelsById = labels;
           relatedById = ranked;
           outlinesById = visualRanks;
+          drawingOutlinesById = drawingRanks;
           openingDrawingById = openingDrawings;
           loading = false;
         });
@@ -493,8 +521,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     });
     if (finishingSetup) unawaited(saveSketchFlowSetup());
     if (preparingDrawing) {
-      await prepareDrawing(upcomingPrompt(1, opening: true))
-          .timeout(const Duration(seconds: 6), onTimeout: () {});
+      await prepareDrawing(
+        upcomingPrompt(1, opening: true),
+        1,
+      ).timeout(const Duration(seconds: 6), onTimeout: () {});
       if (!mounted || phase != Phase.preparing) return;
       setState(() {
         preparingDrawing = false;
@@ -545,16 +575,26 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     audio.setActive(resumed);
   }
 
-  Prompt upcomingPrompt(int nextLevel, {bool opening = false}) {
+  Prompt upcomingPrompt(
+    int nextLevel, {
+    bool opening = false,
+    bool easing = false,
+  }) {
     if (quizPlaytestSeed != null) return deck.last;
     if (opening) {
       for (final candidate in deck.reversed) {
-        if (openingQuestions.contains(candidate.id)) return candidate;
+        if (openingQuestions.contains(candidate.id) &&
+            !balanceHistory.tooHardForEarlyLevels(candidate.id)) {
+          return candidate;
+        }
       }
     }
-    if (nextLevel <= 2) {
+    if (nextLevel <= 2 || easing) {
       for (final candidate in deck.reversed) {
-        if (familiarQuestions.contains(candidate.id)) return candidate;
+        if (familiarQuestions.contains(candidate.id) &&
+            !balanceHistory.tooHardForEarlyLevels(candidate.id)) {
+          return candidate;
+        }
       }
     }
     return deck.last;
@@ -562,9 +602,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void prefetchDrawing() {
     if (aiRound && deck.isNotEmpty) {
-      unawaited(prepareDrawing(upcomingPrompt(quizLevel(score + 1))));
+      final nextLevel = quizLevel(score + 1);
+      unawaited(prepareDrawing(upcomingPrompt(nextLevel), nextLevel));
     }
   }
+
+  bool usesStoredDrawing(String id, int level) =>
+      reviewedStoredQuestions.containsKey(id) ||
+      balanceHistory.prefersStored(id, level);
 
   void nextQuestion([QuizOutcome? outcome]) {
     if (outcome != null) {
@@ -581,35 +626,53 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     level = quizPlaytestSeed == null
         ? quizLevel(score, assistance: assistance)
         : quizPlaytestLevel.clamp(1, 5);
-    final selected = upcomingPrompt(level, opening: outcome == null);
+    final selected = upcomingPrompt(
+      level,
+      opening: outcome == null,
+      easing: assistance,
+    );
     deck.remove(selected);
     prompt = selected;
     questionLogged = false;
     firstTapMs = null;
     firstTapProgress = null;
-    final variants = List<List<List<Offset>>>.of(selected.drawings)
-      ..sort((a, b) => a.length.compareTo(b.length));
-    final pool = level <= 2
-        ? variants.take((variants.length + 1) ~/ 2).toList()
-        : level >= 4
-        ? variants.skip(variants.length ~/ 2).toList()
-        : variants;
+    final reviewed = reviewedStoredQuestions[selected.id];
+    final variants =
+        reviewed ??
+        (List.generate(selected.drawings.length, (i) => i)..sort(
+          (a, b) => selected.drawings[a].length.compareTo(
+            selected.drawings[b].length,
+          ),
+        ));
+    final pool =
+        reviewed ??
+        (level <= 2
+            ? variants.take((variants.length + 1) ~/ 2).toList()
+            : level >= 4
+            ? variants.skip(variants.length ~/ 2).toList()
+            : variants);
     final candidate = generated.remove(selected.id);
-    final fresh = balanceHistory.prefersStored(selected.id, level)
-        ? null
-        : candidate;
+    final fresh = usesStoredDrawing(selected.id, level) ? null : candidate;
+    final storedIndex = fresh == null
+        ? (outcome == null || level == 1 || assistance
+              ? reviewed?.first ?? openingDrawingById[selected.id]!
+              : pool[random.nextInt(pool.length)])
+        : null;
     aiDrawing = fresh != null;
-    drawing =
-        fresh ??
-        (outcome == null
-            ? selected.drawings[openingDrawingById[selected.id]!]
-            : pool[random.nextInt(pool.length)]);
+    drawing = fresh ?? selected.drawings[storedIndex!];
+    final outlineIndex =
+        storedIndex ??
+        (level >= 4 ? closestQuizOutline(drawing, selected.drawings) : null);
+    final outline = outlineIndex == null
+        ? null
+        : drawingOutlinesById[selected.id]![outlineIndex];
     prefetchDrawing();
     final distractors = quizDistractors(
       answer: selected.id,
       candidates: labelsById.keys.toSet(),
       ranked: relatedById[selected.id]!,
-      outlineRanked: outlinesById[selected.id]!,
+      outlineRanked: outline?.ranked ?? outlinesById[selected.id]!,
+      indistinguishable: storedIndex == null ? const {} : outline!.ambiguous,
       level: level,
       random: random,
     );
@@ -723,7 +786,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (!canSkip) return;
     correctStreak = 0;
     streakVisibleUntil = 0;
-    noteFirstTap();
     deadlineMs -= skipPenaltyMs;
     if (remainingMs == 0) {
       recordQuestion(QuizOutcome.skipped);
@@ -1169,13 +1231,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           mainAxisSize: MainAxisSize.min,
           spacing: 12,
           children: [
+            if (history.openingSummary case final summary?)
+              Text('첫 문제 · $summary'),
             for (var level = 1; level <= 5; level++)
-              if (history.hasLevel(level))
+              if (history.hasLevel(level)) ...[
                 Text(
                   '$level단계\nAI 그림 · ${history.describe(level, generated: true)}\n\n'
-                  '저장된 그림 · ${history.describe(level, generated: false)}'
-                  '${history.assistedSummary(level) == null ? '' : '\n${history.assistedSummary(level)}'}',
+                  '저장된 그림 · ${history.describe(level, generated: false)}',
                 ),
+                if (history.promotedSummary(level) case final summary?)
+                  Text('승급 직후 · $summary'),
+                if (history.assistedSummary(level) case final summary?)
+                  Text('난이도 완화 직후 · $summary'),
+              ],
             if (candidates.isNotEmpty)
               const Text(
                 '검수 후보',
@@ -1184,7 +1252,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             for (final candidate in candidates)
               Text(
                 '${labelsById[candidate.id] ?? candidate.id} · ${candidate.level}단계 · '
-                '${candidate.generated ? 'AI' : '저장된 그림'} 정답 ${candidate.correct}/${candidate.total}',
+                '${candidate.generated ? 'AI' : '저장된 그림'} · 정답 ${candidate.correct}/${candidate.total} '
+                '· 건너뛰기 ${candidate.skips}회',
               ),
           ],
         ),
