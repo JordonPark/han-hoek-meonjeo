@@ -1177,4 +1177,75 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  testWidgets('ads require consent and stay off after withdrawal', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 950);
+    addTearDown(tester.view.reset);
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    SharedPreferences.setMockInitialValues({sketchFlowSetupKey: true});
+    final preferences = await SharedPreferences.getInstance();
+    const adsChannel = MethodChannel('plugins.flutter.io/google_mobile_ads');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final adCalls = <MethodCall>[];
+    messenger.setMockMethodCallHandler(adsChannel, (call) async {
+      adCalls.add(call);
+      if (call.method == 'MobileAds#initialize') {
+        throw PlatformException(code: 'test-offline');
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(adsChannel, null));
+
+    Future<void> openHome() async {
+      await tester.pumpWidget(const Sketchbook());
+      await tester.runAsync(() async {
+        for (var attempt = 0; attempt < 50; attempt++) {
+          if (find.text('시작').evaluate().isNotEmpty) return;
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          await tester.pump();
+        }
+      });
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> tapButton(String label) async {
+      final button = find.widgetWithText(TextButton, label);
+      await tester.ensureVisible(button);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+    }
+
+    await openHome();
+    expect(find.byType(AdBanner), findsNothing);
+    expect(adCalls, isEmpty);
+    await tapButton('광고 데이터 사용 선택');
+    expect(adCalls, isEmpty);
+    await tapButton('광고 데이터 사용 동의');
+    expect(preferences.getBool(advertisingConsentKey), isTrue);
+    expect(find.byType(AdBanner), findsOneWidget);
+    expect(adCalls.map((call) => call.method), [
+      '_init',
+      'MobileAds#updateRequestConfiguration',
+      'MobileAds#initialize',
+    ]);
+    expect(adCalls[1].arguments['maxAdContentRating'], 'PG');
+
+    await tapButton('광고 및 개인정보');
+    await tapButton('광고 끄기');
+    expect(preferences.getBool(advertisingConsentKey), isFalse);
+    expect(find.byType(AdBanner), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await openHome();
+    expect(find.byType(AdBanner), findsNothing);
+    expect(adCalls, hasLength(3));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 }

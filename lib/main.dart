@@ -137,6 +137,7 @@ enum Phase { launching, download, home, preparing, playing, results }
 bool get offersSketchFlow => SketchFlow.available && quizPlaytestSeed == null;
 
 const sketchFlowSetupKey = 'sketchflow_setup_seen';
+const advertisingConsentKey = 'advertising_consent_v1';
 
 class GameScreen extends StatefulWidget {
   const GameScreen({super.key});
@@ -206,6 +207,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int countdown = 3;
   bool loading = true;
   bool audioSettingsChanged = false;
+  bool? advertisingConsent;
+  bool savingAdvertisingConsent = false;
   SketchFlow? sketchFlow;
   bool sketchFlowSetupSeen = false;
   bool openingSketchFlow = false;
@@ -230,6 +233,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int get remainingMs => max(0, deadlineMs - elapsed);
   int get seconds => (remainingMs / 1000).ceil();
   bool get playing => phase == Phase.playing;
+  bool get showAds => adsSupported && advertisingConsent == true;
 
   @override
   void initState() {
@@ -481,6 +485,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       );
       setState(() {
         best = max(best, preferences.getInt('best_score') ?? 0);
+        advertisingConsent = preferences.getBool(advertisingConsentKey);
         dailyRecord = parseDailyRecord(preferences.getString(dailyRecordKey));
         replayVisits = preferences.getStringList(replayVisitsKey) ?? [];
         lastBalanceSummary =
@@ -1358,6 +1363,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       child: Column(
         children: [
           audioSettings(),
+          if (adsSupported)
+            TextButton(
+              onPressed: savingAdvertisingConsent
+                  ? null
+                  : showAdvertisingSettings,
+              child: Text(
+                advertisingConsent == null ? '광고 데이터 사용 선택' : '광고 및 개인정보',
+              ),
+            ),
           TextButton(
             onPressed: () => showAboutDialog(
               context: context,
@@ -1407,21 +1421,113 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             ),
             child: const Text('앱 정보'),
           ),
-          const AdBanner(),
+          if (showAds) AdBanner(onAdInfo: showAdInfo),
         ],
       ),
     ),
   ], distribution: MainAxisAlignment.spaceEvenly);
 
-  Future<void> openStorePage(String page) async {
-    final url = Uri.https('jordonpark.github.io', '/han-hoek-meonjeo/$page');
-    if (await launchUrl(url, mode: LaunchMode.externalApplication) ||
-        !mounted) {
-      return;
+  Future<void> openStorePage(String page, {String? section}) async {
+    final url = Uri.https(
+      'jordonpark.github.io',
+      '/han-hoek-meonjeo/$page',
+    ).replace(fragment: section);
+    try {
+      if (await launchUrl(url, mode: LaunchMode.externalApplication)) return;
+    } on Exception catch (_) {
+      // Give the player the same feedback if the platform cannot open a link.
     }
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('페이지를 열 수 없어요. 잠시 후 다시 시도해 주세요.')),
     );
+  }
+
+  Future<void> showAdvertisingSettings() async {
+    final allowed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('광고 및 개인정보'),
+        scrollable: true,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '광고를 허용하면 홈과 결과 화면에 Google AdMob의 비개인화 광고가 표시돼요. '
+              'Google은 대략적인 위치, 기기 식별자, 광고 노출·상호 작용 및 진단 정보를 '
+              '광고 제공, 부정 사용 방지, 통계 및 오류 분석에 사용할 수 있어요.',
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '현재 광고 ${advertisingConsent == true ? '켜짐' : '꺼짐'}. '
+              '광고 선택과 관계없이 모든 그림 퀴즈를 플레이할 수 있어요.',
+            ),
+            TextButton(
+              onPressed: () => openStorePage('privacy.html'),
+              child: const Text('개인정보 처리방침'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('광고 끄기'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('광고 데이터 사용 동의'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || allowed == null) return;
+    setState(() {
+      savingAdvertisingConsent = true;
+      if (!allowed) advertisingConsent = false;
+    });
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      if (!await preferences.setBool(advertisingConsentKey, allowed)) {
+        throw Exception('Could not save the advertising preference');
+      }
+      if (mounted) setState(() => advertisingConsent = allowed);
+    } on Exception catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('광고 설정을 저장하지 못했어요. 다시 시도해 주세요.')),
+      );
+    } finally {
+      if (mounted) setState(() => savingAdvertisingConsent = false);
+    }
+  }
+
+  Future<void> showAdInfo() async {
+    final report = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        scrollable: true,
+        title: const Text('광고 정보 및 신고'),
+        content: const Text(
+          'Google AdMob이 제공하는 비개인화 광고예요. 광고 제공에는 앱의 콘텐츠와 '
+          'IP 주소에서 추정한 대략적인 지역이 사용될 수 있어요. '
+          '배너에 Google 광고 정보 메뉴가 표시되면 광고별 정보를 볼 수 있어요.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('닫기'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('부적절한 광고 신고'),
+          ),
+        ],
+      ),
+    );
+    if (mounted && report == true) {
+      await openStorePage('support.html', section: 'report-ad');
+    }
   }
 
   Widget audioSettings() => Wrap(
@@ -2392,8 +2498,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     ],
                   ),
                 ),
-                const SizedBox(height: 8),
-                const AdBanner(),
+                if (showAds) ...[
+                  const SizedBox(height: 8),
+                  AdBanner(onAdInfo: showAdInfo),
+                ],
               ],
             ),
           ),
@@ -2752,10 +2860,24 @@ bool get adsSupported =>
 Future<InitializationStatus>? _adInitialization;
 
 Future<InitializationStatus> initializeAds() =>
-    _adInitialization ??= MobileAds.instance.initialize();
+    _adInitialization ??= _configureAds();
+
+Future<InitializationStatus> _configureAds() async {
+  try {
+    await MobileAds.instance.updateRequestConfiguration(
+      RequestConfiguration(maxAdContentRating: MaxAdContentRating.pg),
+    );
+    return await MobileAds.instance.initialize();
+  } catch (_) {
+    _adInitialization = null;
+    rethrow;
+  }
+}
 
 class AdBanner extends StatefulWidget {
-  const AdBanner({super.key});
+  const AdBanner({super.key, required this.onAdInfo});
+
+  final VoidCallback onAdInfo;
   @override
   State<AdBanner> createState() => _AdBannerState();
 }
@@ -2811,7 +2933,7 @@ class _AdBannerState extends State<AdBanner> {
   @override
   Widget build(BuildContext context) {
     final ad = banner;
-    if (!adsSupported) return const SizedBox.shrink();
+    if (!adsSupported || !loaded || ad == null) return const SizedBox.shrink();
     return LayoutBuilder(
       builder: (context, constraints) {
         const size = AdSize.banner;
@@ -2819,10 +2941,19 @@ class _AdBannerState extends State<AdBanner> {
           return const SizedBox.shrink();
         }
         return Center(
-          child: SizedBox(
-            width: size.width.toDouble(),
-            height: size.height.toDouble(),
-            child: loaded && ad != null ? AdWidget(ad: ad) : null,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: size.width.toDouble(),
+                height: size.height.toDouble(),
+                child: AdWidget(ad: ad),
+              ),
+              TextButton(
+                onPressed: widget.onAdInfo,
+                child: const Text('광고 정보 및 신고'),
+              ),
+            ],
           ),
         );
       },
