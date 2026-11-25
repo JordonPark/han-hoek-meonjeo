@@ -323,6 +323,7 @@ class QuizResult {
     required this.level,
     required this.questionId,
     required this.generated,
+    this.storedDrawingIndex,
     required this.assisted,
     this.enteringLevelFive = false,
     required this.outcome,
@@ -336,6 +337,7 @@ class QuizResult {
   final int level;
   final String questionId;
   final bool generated;
+  final int? storedDrawingIndex;
   final bool assisted;
   final bool enteringLevelFive;
   final QuizOutcome outcome;
@@ -349,6 +351,7 @@ class QuizResult {
     'level': level,
     'questionId': questionId,
     'generated': generated,
+    if (storedDrawingIndex != null) 'storedDrawingIndex': storedDrawingIndex,
     'assisted': assisted,
     if (enteringLevelFive) 'enteringLevelFive': true,
     'outcome': outcome.name,
@@ -365,7 +368,13 @@ class QuizBalanceHistory {
   QuizBalanceHistory(Iterable<String> rounds) {
     for (final round in rounds) {
       try {
-        final questions = (jsonDecode(round) as Map)['questions'] as List;
+        final entry = jsonDecode(round) as Map;
+        final questions = entry['questions'] as List;
+        final fourAtSeven = _ReviewOutcomes();
+        var sawLevelFiveEntry = false;
+        var followsSuccessfulRecovery = false;
+        var sawOpeningQuestion = false;
+        int? openingFirstCorrectMs;
         var score = 0;
         var previousScore = 0;
         var roundElapsed = 0;
@@ -377,24 +386,64 @@ class QuizBalanceHistory {
           final outcome = row['outcome'];
           final correct = outcome == QuizOutcome.correct.name;
           final skipped = outcome == QuizOutcome.skipped.name;
+          final assisted = row['assisted'] == true;
           // Older versions counted a skip without an answer as a first tap.
           final skipWasFirst = skipped && row['wrongTaps'] == 0;
           final firstTap = skipWasFirst ? null : row['firstTapMs'];
           final progress = skipWasFirst ? null : row['firstTapProgress'];
           final firstChoiceMs = firstTap is int ? firstTap : null;
           final id = row['questionId'];
+          final storedIndex = row['storedDrawingIndex'];
           final totals = _byLevel.putIfAbsent((level, ai), _QuizTotals.new);
           totals.add(correct, duration, skipped, firstChoiceMs);
           roundElapsed += duration;
           if (index == 0) {
             _opening.add(correct, duration, skipped, firstChoiceMs);
+            sawOpeningQuestion = true;
           } else if (index == 1) {
             _second.add(correct, duration, skipped, firstChoiceMs);
           }
           if (index < 2 && score == 0 && correct) {
             _earlyFirstCorrectMs += roundElapsed;
             _earlyFirstCorrect++;
+            openingFirstCorrectMs = roundElapsed;
           }
+          if (index < 2 && !ai && id is String) {
+            if (storedIndex is int && storedIndex >= 0) {
+              _openingDrawings
+                  .putIfAbsent((id, storedIndex), _ReviewOutcomes.new)
+                  .add(outcome);
+            }
+            if (entry['firstPlay'] == true && outcome is String) {
+              _firstPlayExamples.add((
+                id: id,
+                sample: storedIndex is int ? storedIndex + 1 : null,
+                outcome: outcome,
+              ));
+            }
+          }
+          if (level == 4 && score == 7 && !assisted) {
+            fourAtSeven.add(outcome);
+          }
+          if (!sawLevelFiveEntry &&
+              level == 5 &&
+              score == 8 &&
+              row['enteringLevelFive'] == true) {
+            sawLevelFiveEntry = true;
+            _fourBeforeFive.merge(fourAtSeven);
+            _firstFive.add(outcome);
+            if (skipped && id is String) {
+              _fiveSkipExamples.add((
+                id: id,
+                sample: storedIndex is int ? storedIndex + 1 : null,
+              ));
+            }
+          }
+          if (assisted) _recovery.add(outcome);
+          if (followsSuccessfulRecovery && !assisted) {
+            _afterRecovery.add(outcome);
+          }
+          followsSuccessfulRecovery = assisted && correct;
           if (row['enteringLevelFive'] == true) {
             _levelFiveEntry.add(correct, duration, skipped, firstChoiceMs);
           }
@@ -410,7 +459,7 @@ class QuizBalanceHistory {
             totals.knownProgress++;
             if (progress < 1) totals.beforeFinish++;
           }
-          if (row['assisted'] == true) {
+          if (assisted) {
             _assisted
                 .putIfAbsent(level, _QuizTotals.new)
                 .add(correct, duration, skipped, firstChoiceMs);
@@ -431,6 +480,13 @@ class QuizBalanceHistory {
             }
           }
         }
+        if (sawOpeningQuestion && entry['firstPlay'] == true) {
+          _verifiedFirstPlays++;
+          if (openingFirstCorrectMs != null) {
+            _verifiedFirstPlaySuccesses++;
+            _verifiedFirstPlayCorrectMs += openingFirstCorrectMs;
+          }
+        }
       } on FormatException {
         continue;
       } on TypeError {
@@ -447,6 +503,16 @@ class QuizBalanceHistory {
   final _second = _QuizTotals();
   final _levelFiveEntry = _QuizTotals();
   final _finishedPairs = <(String, String), int>{};
+  final _openingDrawings = <(String, int), _ReviewOutcomes>{};
+  final _firstPlayExamples = <({String id, int? sample, String outcome})>[];
+  final _fiveSkipExamples = <({String id, int? sample})>[];
+  final _fourBeforeFive = _ReviewOutcomes();
+  final _firstFive = _ReviewOutcomes();
+  final _recovery = _ReviewOutcomes();
+  final _afterRecovery = _ReviewOutcomes();
+  int _verifiedFirstPlays = 0;
+  int _verifiedFirstPlaySuccesses = 0;
+  int _verifiedFirstPlayCorrectMs = 0;
   int _earlyFirstCorrect = 0;
   int _earlyFirstCorrectMs = 0;
 
@@ -496,6 +562,75 @@ class QuizBalanceHistory {
 
   String? get levelFiveEntrySummary =>
       _levelFiveEntry.questions == 0 ? null : _levelFiveEntry.summary;
+
+  List<({String title, String value})> levelProgressReview(
+    Map<String, String> labels,
+  ) {
+    final earlyFailures =
+        _openingDrawings.entries
+            .where((entry) => entry.value.misses >= 2)
+            .toList()
+          ..sort(
+            (a, b) => (b.value.misses / b.value.total).compareTo(
+              a.value.misses / a.value.total,
+            ),
+          );
+    final firstPlayTime = _verifiedFirstPlaySuccesses == 0
+        ? ''
+        : ' · 평균 ${(_verifiedFirstPlayCorrectMs / _verifiedFirstPlaySuccesses / 1000).toStringAsFixed(1)}초';
+    final firstPlay = _verifiedFirstPlays == 0
+        ? '새 설치 첫 플레이 기록 없음'
+        : '새 설치 첫 플레이 $_verifiedFirstPlaySuccesses/$_verifiedFirstPlays판$firstPlayTime';
+    final opening = earlyFirstCorrectSummary ?? '기록 없음';
+    final increase = _firstFive.skipChangeFrom(_fourBeforeFive);
+    final missedReturn = _recovery.correct - _afterRecovery.total;
+    String label(String id, int? sample) =>
+        '${labels[id] ?? id}${sample == null ? '' : ' · 샘플 $sample번'}';
+    final firstExamples = _firstPlayExamples.take(2).map((example) {
+      final outcome = switch (example.outcome) {
+        'correct' => '정답',
+        'skipped' => '건너뛰기',
+        'wrong' => '오답',
+        'timeUp' => '시간 종료',
+        _ => example.outcome,
+      };
+      return '${label(example.id, example.sample)} · $outcome';
+    });
+    return [
+      (
+        title: '첫 두 문제에서 첫 정답',
+        value: [firstPlay, ...firstExamples, '최근 전체 $opening'].join('\n'),
+      ),
+      ...earlyFailures.take(3).map((entry) {
+        final (id, index) = entry.key;
+        return (
+          title: '초반에 반복해서 놓친 그림',
+          value:
+              '${labels[id] ?? id} · 샘플 ${index + 1}번 · ${entry.value.misses}/${entry.value.total}회 놓침',
+        );
+      }),
+      (
+        title: '4단계에서 5단계로',
+        value:
+            '7점 구간 4단계 · ${_fourBeforeFive.summary}\n첫 5단계 · ${_firstFive.summary}'
+            '${increase == null ? '' : '\n건너뛰기 변화 ${increase >= 0 ? '+' : ''}$increase%p'}',
+      ),
+      if (_fiveSkipExamples.isNotEmpty)
+        (
+          title: '첫 5단계에서 건너뛴 그림',
+          value: _fiveSkipExamples
+              .take(3)
+              .map((example) => label(example.id, example.sample))
+              .join('\n'),
+        ),
+      (
+        title: '회복 문제와 복귀 직후',
+        value:
+            '회복 문제 · ${_recovery.summary}\n회복 성공 후 첫 일반 문제 · ${_afterRecovery.summary}'
+            '${missedReturn > 0 ? '\n복귀 전에 끝난 판 $missedReturn회' : ''}',
+      ),
+    ];
+  }
 
   List<({String id, String choice, int count})> finishedPairCandidates() {
     final ranked =
@@ -553,6 +688,52 @@ class QuizBalanceHistory {
         : ' · 완성 전 선택 ${totals.beforeFinish}/${totals.knownProgress}';
     return '${totals.questions}문제 · 정답률 $percent% · 정답까지 $correctTime\n'
         '첫 선택 ${totals.firstChoiceTime} · 건너뛰기 ${totals.skipPercent}%$early';
+  }
+}
+
+class _ReviewOutcomes {
+  int completed = 0;
+  int correct = 0;
+  int skipped = 0;
+  int timedOut = 0;
+
+  int get total => completed + timedOut;
+  int get misses => total - correct;
+
+  void add(Object? outcome) {
+    switch (outcome) {
+      case 'correct':
+        correct++;
+        completed++;
+      case 'skipped':
+        skipped++;
+        completed++;
+      case 'wrong':
+        completed++;
+      case 'timeUp':
+        timedOut++;
+    }
+  }
+
+  void merge(_ReviewOutcomes other) {
+    completed += other.completed;
+    correct += other.correct;
+    skipped += other.skipped;
+    timedOut += other.timedOut;
+  }
+
+  int? skipChangeFrom(_ReviewOutcomes baseline) {
+    if (completed == 0 || baseline.completed == 0) return null;
+    return (100 * (skipped / completed - baseline.skipped / baseline.completed))
+        .round();
+  }
+
+  String get summary {
+    if (total == 0) return '기록 없음';
+    final outcomes = completed == 0
+        ? '완료 0문제'
+        : '정답 $correct/$completed · 건너뛰기 $skipped/$completed (${(100 * skipped / completed).round()}%)';
+    return timedOut == 0 ? outcomes : '$outcomes · 시간 종료 $timedOut회';
   }
 }
 

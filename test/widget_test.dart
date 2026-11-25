@@ -85,6 +85,71 @@ void main() {
     },
   );
 
+  test('progress review compares paired entry rounds and counts timeouts separately', () {
+    QuizResult row(
+      int level,
+      QuizOutcome outcome, {
+      String id = 'apple',
+      bool assisted = false,
+      bool entering = false,
+    }) => QuizResult(
+      level: level,
+      questionId: id,
+      generated: false,
+      storedDrawingIndex: 1,
+      assisted: assisted,
+      enteringLevelFive: entering,
+      outcome: outcome,
+      wrongTaps: 0,
+      firstTapMs: null,
+      durationMs: 2000,
+    );
+
+    final prefix = [
+      row(1, QuizOutcome.skipped),
+      for (var score = 0; score < 7; score++)
+        row(quizLevel(score), QuizOutcome.correct, id: 'banana'),
+    ];
+    final recorded = QuizBalanceHistory([
+      jsonEncode({
+        'firstPlay': true,
+        'questions': [
+          ...prefix.map((row) => row.toJson()),
+          row(4, QuizOutcome.skipped).toJson(),
+          row(4, QuizOutcome.correct).toJson(),
+          row(5, QuizOutcome.skipped, id: 'house', entering: true).toJson(),
+          row(5, QuizOutcome.wrong).toJson(),
+          row(4, QuizOutcome.correct, assisted: true).toJson(),
+          row(5, QuizOutcome.timeUp).toJson(),
+        ],
+      }),
+      jsonEncode({
+        'questions': [
+          ...prefix.map((row) => row.toJson()),
+          row(4, QuizOutcome.skipped).toJson(),
+          row(4, QuizOutcome.skipped).toJson(),
+          row(3, QuizOutcome.correct, assisted: true).toJson(),
+        ],
+      }),
+    ]);
+    final report = {
+      for (final section in recorded.levelProgressReview({
+        'apple': '사과',
+        'house': '집',
+      }))
+        section.title: section.value,
+    };
+    expect(report['첫 두 문제에서 첫 정답'], contains('새 설치 첫 플레이 1/1판 · 평균 4.0초'));
+    expect(report['첫 두 문제에서 첫 정답'], contains('사과 · 샘플 2번 · 건너뛰기'));
+    expect(report['초반에 반복해서 놓친 그림'], '사과 · 샘플 2번 · 2/2회 놓침');
+    expect(report['4단계에서 5단계로'], contains('4단계 · 정답 1/2 · 건너뛰기 1/2 (50%)'));
+    expect(report['4단계에서 5단계로'], contains('건너뛰기 변화 +50%p'));
+    expect(report['첫 5단계에서 건너뛴 그림'], '집 · 샘플 2번');
+    expect(report['회복 문제와 복귀 직후'], contains('회복 문제 · 정답 2/2'));
+    expect(report['회복 문제와 복귀 직후'], contains('완료 0문제 · 시간 종료 1회'));
+    expect(report['회복 문제와 복귀 직후'], contains('복귀 전에 끝난 판 1회'));
+  });
+
   test('AI outlines keep recognizable drawings and block ambiguous rivals', () {
     final vertical = [
       [const Offset(.5, .1), const Offset(.5, .9)],
@@ -702,6 +767,40 @@ void main() {
       await tester.pump();
       expect(find.text('정답이에요!'), findsOneWidget);
       expect(game.score, 3);
+      final preferences = await SharedPreferences.getInstance();
+      final logged = jsonDecode(
+        preferences.getStringList(balanceHistoryKey)!.single,
+      ) as Map;
+      expect(logged['firstPlay'], isTrue);
+      expect(
+        (logged['questions'] as List).first['storedDrawingIndex'],
+        isA<int>(),
+      );
+      await tester.tap(find.widgetWithText(TextButton, '닫기'));
+      await tester.pumpAndSettle();
+      await tester.tap(home);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, '앱 정보'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, '레벨 진행 검수'));
+      await tester.pumpAndSettle();
+      expect(find.text('레벨 진행 검수').last, findsOneWidget);
+      String? copiedReport;
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedReport = (call.arguments as Map)['text'] as String;
+        }
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+      await tester.tap(find.widgetWithText(TextButton, '기록 복사'));
+      await tester.pumpAndSettle();
+      expect(copiedReport, contains('새 설치 첫 플레이 1/1판'));
+      expect(copiedReport, contains('회복 문제와 복귀 직후'));
       await tester.pumpWidget(const SizedBox());
     },
   );

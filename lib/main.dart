@@ -42,6 +42,7 @@ String get balanceHistoryKey =>
     quizPlaytestSeed == null ? 'recent_quiz_balance' : 'quiz_playtest_history';
 String get balanceSummaryKey =>
     quizPlaytestSeed == null ? 'last_balance_summary' : 'quiz_playtest_summary';
+const quizFirstPlayStartedKey = 'quiz_first_play_started';
 
 double strokeProgressAt({
   required int elapsedMs,
@@ -173,6 +174,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool assistance = false;
   bool enteringLevelFive = false;
   bool questionLogged = false;
+  int? storedDrawingIndex;
+  Future<bool>? firstPlayAtStart;
   int? firstTapMs;
   double? firstTapProgress;
   List<Prompt> deck = [];
@@ -531,6 +534,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       round++;
       generated.clear();
       aiRound = sketchFlow != null;
+      firstPlayAtStart = seed == null ? markFirstPlay() : null;
       prompt = null;
       nextQuestion();
     });
@@ -551,6 +555,21 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     audio.setRoundPlaying(true);
     refresh?.cancel();
     refresh = Timer.periodic(const Duration(milliseconds: 33), (_) => tick());
+  }
+
+  Future<bool> markFirstPlay() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      if (preferences.getBool(quizFirstPlayStartedKey) == true ||
+          (preferences.getStringList(balanceHistoryKey)?.isNotEmpty ?? false) ||
+          preferences.getString(balanceSummaryKey) != null ||
+          preferences.getInt('best_score') != null) {
+        return false;
+      }
+      return await preferences.setBool(quizFirstPlayStartedKey, true);
+    } on Exception {
+      return false;
+    }
   }
 
   void tick() {
@@ -668,6 +687,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       }
     }
     aiDrawing = fresh != null;
+    storedDrawingIndex = storedIndex;
     drawing = fresh?.drawing ?? selected.drawings[storedIndex!];
     final outline = storedIndex == null
         ? null
@@ -704,6 +724,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         level: level,
         questionId: prompt!.id,
         generated: aiDrawing,
+        storedDrawingIndex: storedDrawingIndex,
         assisted: assistance,
         enteringLevelFive: enteringLevelFive,
         outcome: outcome,
@@ -717,13 +738,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Future<void> saveRoundBalance(String summary) async {
-    final current = jsonEncode({
+    final firstPlay = firstPlayAtStart;
+    final snapshot = <String, Object>{
       'durationMs': elapsed,
       'score': score,
-      if (quizPlaytestSeed != null) 'playtestSeed': quizPlaytestSeed,
+      'playtestSeed': ?quizPlaytestSeed,
       'questions': roundResults.map((result) => result.toJson()).toList(),
-    });
+    };
     try {
+      if (firstPlay != null && await firstPlay) snapshot['firstPlay'] = true;
+      final current = jsonEncode(snapshot);
       final preferences = await SharedPreferences.getInstance();
       final rounds = preferences.getStringList(balanceHistoryKey) ?? [];
       final recent = [current, ...rounds.take(19)];
@@ -1199,6 +1223,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     onPressed: showBalanceDetails,
                     child: const Text('최근 20판 난이도 비교'),
                   ),
+                TextButton(
+                  onPressed: showLevelProgressReview,
+                  child: const Text('레벨 진행 검수'),
+                ),
                 const Text('그림 데이터: Google Quick, Draw! (CC BY 4.0)'),
                 const SelectableText(
                   'https://github.com/googlecreativelab/quickdraw-dataset',
@@ -1236,6 +1264,59 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       ),
     ],
   );
+
+  void showLevelProgressReview() {
+    final sections = balanceHistory.levelProgressReview(labelsById);
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('레벨 진행 검수'),
+        scrollable: true,
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          spacing: 12,
+          children: [
+            const Text('이 기기의 최근 20판'),
+            for (final section in sections)
+              Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(
+                      text: '${section.title}\n',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    TextSpan(text: section.value),
+                  ],
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              final report = [
+                '레벨 진행 검수 · 이 기기의 최근 20판',
+                for (final section in sections)
+                  '${section.title}\n${section.value}',
+              ].join('\n\n');
+              await Clipboard.setData(ClipboardData(text: report));
+              if (!dialogContext.mounted || !mounted) return;
+              Navigator.pop(dialogContext);
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('레벨 진행 기록을 복사했어요.')));
+            },
+            child: const Text('기록 복사'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('닫기'),
+          ),
+        ],
+      ),
+    );
+  }
 
   void showBalanceDetails() {
     final history = balanceHistory;
