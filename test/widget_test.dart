@@ -331,6 +331,12 @@ void main() {
       await tester.tap(find.widgetWithText(OutlinedButton, wrong));
       await tester.pump();
       expect(find.text('틀렸어요'), findsOneWidget);
+      expect(find.text('다른 보기 잠시 대기'), findsOneWidget);
+      final retryProgress = find.byKey(const ValueKey('retry-wait-progress'));
+      expect(
+        tester.widget<LinearProgressIndicator>(retryProgress).value,
+        inInclusiveRange(0.0, 1.0),
+      );
       expect(find.text('✕ $wrong'), findsOneWidget);
       expect(
         (game.lockedUntil as int) - (game.elapsed as int),
@@ -342,8 +348,24 @@ void main() {
             .every((button) => button.onPressed == null),
         isTrue,
       );
-      game.setState(() => game.lockedUntil = 0);
+      game.setState(() => game.lockedUntil = (game.elapsed as int) - 1);
       await tester.pump();
+      expect(retryProgress, findsNothing);
+      expect(find.text('다른 보기를 골라 보세요'), findsOneWidget);
+      expect(
+        tester
+            .widget<OutlinedButton>(find.widgetWithText(OutlinedButton, answer))
+            .onPressed,
+        isNotNull,
+      );
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.widgetWithText(OutlinedButton, '✕ $wrong'),
+            )
+            .onPressed,
+        isNull,
+      );
       await tester.tap(find.widgetWithText(OutlinedButton, answer));
       await tester.pump();
       expect(game.deadlineMs, roundStartMs + correctBonusMs);

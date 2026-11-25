@@ -21,6 +21,9 @@ const correctBonusMs = 1000;
 const maxRoundBonusMs = 15000;
 const skipPenaltyMs = 3000;
 const skipWaitMs = 2000;
+const firstWrongLockMs = 800;
+const repeatWrongLockMs = 1500;
+const lastWrongTransitionMs = 350;
 final quizPlaytestSeed = int.tryParse(
   const String.fromEnvironment('QUIZ_PLAYTEST_SEED'),
 );
@@ -694,9 +697,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         unawaited(HapticFeedback.mediumImpact());
         audio.play(GameSound.wrong);
         disabled.add(option);
-        lockedUntil = elapsed + (disabled.length == 1 ? 800 : 1500);
+        final now = elapsed;
+        lockedUntil =
+            now + (disabled.length == 1 ? firstWrongLockMs : repeatWrongLockMs);
         if (disabled.length == 3) {
-          advanceAfterWrongAt = elapsed + 350;
+          advanceAfterWrongAt = now + lastWrongTransitionMs;
         }
       }
     });
@@ -1360,39 +1365,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               ),
               SizedBox(height: row == 0 ? 10 : 4),
             ],
-          Semantics(
-            liveRegion: true,
-            child: SizedBox(
-              height: largeText ? 42 : 22,
-              child: elapsed < lockedUntil
-                  ? title('틀렸어요', size: 18, color: const Color(0xffa33830))
-                  : elapsed < streakVisibleUntil && correctStreak >= 3
-                  ? Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Image.asset(
-                          'assets/paper-rabbit.webp',
-                          width: 22,
-                          excludeFromSemantics: true,
-                        ),
-                        const SizedBox(width: 5),
-                        title('$correctStreak연속 정답!', size: 16, color: blue),
-                      ],
-                    )
-                  : roundResults.isEmpty && !canSkip
-                  ? FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: const Text(
-                        '그림 완성 2초 뒤에 건너뛸 수 있어요',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Color(0xff594b3e),
-                        ),
-                      ),
-                    )
-                  : null,
-            ),
-          ),
+          SizedBox(height: largeText ? 42 : 28, child: answerFeedback()),
           skipButton(),
         ],
       );
@@ -1419,6 +1392,72 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       );
     },
   );
+
+  Widget answerFeedback() {
+    const wrongColor = Color(0xffa33830);
+    const neutral = Color(0xff594b3e);
+    final now = elapsed;
+    final nextDrawingAt = advanceAfterWrongAt;
+    Widget? message;
+    if (now < lockedUntil) {
+      final end = nextDrawingAt ?? lockedUntil;
+      final duration = nextDrawingAt != null
+          ? lastWrongTransitionMs
+          : disabled.length == 1
+          ? firstWrongLockMs
+          : repeatWrongLockMs;
+      final remaining = ((end - now) / duration).clamp(0.0, 1.0);
+      message = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          title('틀렸어요', size: 14, color: wrongColor),
+          const SizedBox(width: 6),
+          Text(
+            nextDrawingAt == null ? '다른 보기 잠시 대기' : '다음 그림 준비 중',
+            style: const TextStyle(fontSize: 13, color: neutral),
+          ),
+          const SizedBox(width: 7),
+          ExcludeSemantics(
+            child: SizedBox(
+              width: 31,
+              child: LinearProgressIndicator(
+                key: const ValueKey('retry-wait-progress'),
+                value: remaining,
+                minHeight: 4,
+                color: wrongColor,
+                backgroundColor: const Color(0xffebdacc),
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+          ),
+        ],
+      );
+    } else if (disabled.isNotEmpty && now < lockedUntil + 1200) {
+      message = title('다른 보기를 골라 보세요', size: 14, color: blue);
+    } else if (now < streakVisibleUntil && correctStreak >= 3) {
+      message = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Image.asset(
+            'assets/paper-rabbit.webp',
+            width: 22,
+            excludeFromSemantics: true,
+          ),
+          const SizedBox(width: 5),
+          title('$correctStreak연속 정답!', size: 16, color: blue),
+        ],
+      );
+    } else if (roundResults.isEmpty && !canSkip) {
+      message = const Text(
+        '그림 완성 2초 뒤에 건너뛸 수 있어요',
+        style: TextStyle(fontSize: 13, color: neutral),
+      );
+    }
+    return Semantics(
+      liveRegion: true,
+      child: FittedBox(fit: BoxFit.scaleDown, child: message),
+    );
+  }
 
   Widget skipButton() {
     final enabled = canSkip;
