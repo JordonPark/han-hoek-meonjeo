@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'fun_design.dart';
 import 'game_audio.dart';
 import 'quiz_balance.dart';
 import 'round_rules.dart';
@@ -179,6 +180,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   String? error;
   int score = 0;
   int best = 0;
+  int? roundDailyDay;
+  ({int day, int score})? dailyRecord;
+  int roundPreviousBest = 0;
+  int quickCueUntil = 0;
+  List<String> replayVisits = [];
+  String? replaySequence;
+  int sequenceStarts = 0;
   int level = 1;
   int questionAt = 0;
   int deadlineMs = roundStartMs;
@@ -472,6 +480,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       );
       setState(() {
         best = max(best, preferences.getInt('best_score') ?? 0);
+        dailyRecord = parseDailyRecord(preferences.getString(dailyRecordKey));
+        replayVisits = preferences.getStringList(replayVisitsKey) ?? [];
         lastBalanceSummary =
             preferences.getString(balanceSummaryKey) ?? lastBalanceSummary;
         if (!audioSettingsChanged) {
@@ -515,7 +525,33 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> start() async {
+  Future<void> saveDailyRecord(int day, int score) async {
+    try {
+      await (await SharedPreferences.getInstance()).setString(
+        dailyRecordKey,
+        '$day:$score',
+      );
+    } on Exception catch (_) {
+      // The daily score is still available in this session.
+    }
+  }
+
+  Future<void> saveReplayProgress() async {
+    final sequence = replaySequence;
+    if (sequence == null) return;
+    final recent = recordReplayVisit(replayVisits, sequence, sequenceStarts);
+    replayVisits = recent;
+    try {
+      await (await SharedPreferences.getInstance()).setStringList(
+        replayVisitsKey,
+        recent,
+      );
+    } on Exception catch (_) {
+      // Counts remain available in this session.
+    }
+  }
+
+  Future<void> start({bool daily = false, bool replay = false}) async {
     if (pack.isEmpty || phase == Phase.preparing || playing) return;
     final finishingSetup = phase == Phase.download && !sketchFlowSetupSeen;
     setState(() {
@@ -527,24 +563,50 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       missed.clear();
       roundResults.clear();
       missedStreak = 0;
-      final seed = quizPlaytestSeed;
-      if (seed != null) random = Random(seed);
+      roundDailyDay = daily ? dailySketchDay(DateTime.now()) : null;
+      final seed = quizPlaytestSeed ?? roundDailyDay;
+      roundPreviousBest = daily
+          ? dailyRecord?.day == roundDailyDay
+                ? dailyRecord!.score
+                : 0
+          : best;
+      if (seed != null) {
+        replaySequence = null;
+        sequenceStarts = 0;
+      } else if (replay && replaySequence != null) {
+        sequenceStarts++;
+        unawaited(saveReplayProgress());
+      } else {
+        replaySequence = DateTime.now().microsecondsSinceEpoch.toString();
+        sequenceStarts = 1;
+      }
+      random = Random(seed);
       deck = List<Prompt>.of(pack)..shuffle(random);
+      if (daily) {
+        final opening = deck.reversed
+            .where((prompt) => openingQuestions.contains(prompt.id))
+            .take(2)
+            .toList();
+        deck.removeWhere(opening.contains);
+        deck.addAll(opening.reversed);
+      }
       clock.reset();
-      deadlineMs = roundStartMs;
+      deadlineMs = daily ? dailyRoundStartMs : roundStartMs;
       bonusGrantedMs = 0;
       bonusCapAtMs = null;
       bonusCapScore = null;
       roundEndedBySkip = false;
       correctStreak = 0;
       streakVisibleUntil = 0;
+      quickCueUntil = 0;
       finalTenCuePlayed = false;
       timeFeedbackUntil = 0;
       timeFeedback = null;
       round++;
       generated.clear();
-      aiRound = sketchFlow != null;
+      aiRound = !daily && sketchFlow != null;
       firstPlayAtStart = seed == null ? markFirstPlay() : null;
+      if (daily) unawaited(markFirstPlay());
       prompt = null;
       nextQuestion();
     });
@@ -613,7 +675,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     bool earlyDrawing = false,
     bool easing = false,
   }) {
-    if (quizPlaytestSeed != null) return deck.last;
+    if (quizPlaytestSeed != null || roundDailyDay != null) return deck.last;
     final previous = prompt?.id;
     return promptsById[chooseQuizQuestion(
       shuffled: deck.reversed.map((prompt) => prompt.id),
@@ -649,16 +711,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       finish();
       return;
     }
-    assistance = quizPlaytestSeed == null && missedStreak >= 2;
+    final ordinary = quizPlaytestSeed == null && roundDailyDay == null;
+    assistance = ordinary && missedStreak >= 2;
     if (missedStreak >= 2) missedStreak = 0;
-    level = quizPlaytestSeed == null
+    level = roundDailyDay != null
+        ? dailySketchLevel(roundResults.length)
+        : quizPlaytestSeed == null
         ? quizLevel(score, assistance: assistance)
         : quizPlaytestLevel.clamp(1, 5);
     final earlyDrawing = quizPlaytestSeed == null && roundResults.length < 2;
     enteringLevelFive =
-        quizPlaytestSeed == null &&
-        outcome == QuizOutcome.correct &&
-        score == 8;
+        ordinary && outcome == QuizOutcome.correct && score == 8;
     final selected = upcomingPrompt(
       level,
       earlyDrawing: earlyDrawing,
@@ -800,7 +863,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     noteFirstTap();
     setState(() {
       if (option == prompt!.label) {
-        audio.play(GameSound.correct);
+        final quick = isQuickCorrect(firstTapProgress, disabled.length);
+        audio.play(quick ? GameSound.quickCorrect : GameSound.correct);
+        if (quick) quickCueUntil = elapsed + 900;
         score++;
         correctStreak++;
         if (correctStreak % 3 == 0) {
@@ -896,13 +961,22 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final summary =
         '진행 ${(elapsed / 1000).round()}초 · 정답 $score개 · 오답 $wrongs회 · 건너뛰기 $skips회\n'
         'AI 그림 $aiCount개 · 저장된 그림 ${roundResults.length - aiCount}개 · 난이도 완화 $assists회';
-    unawaited(saveRoundBalance(summary));
+    final dailyDay = roundDailyDay;
+    if (dailyDay == null) {
+      unawaited(saveRoundBalance(summary));
+      if (sequenceStarts == 1) unawaited(saveReplayProgress());
+    }
     audio.setRoundPlaying(false);
     audio.play(GameSound.finish);
     setState(() {
       phase = Phase.results;
-      lastBalanceSummary = summary;
-      if (quizPlaytestSeed == null && score > best) {
+      if (dailyDay == null) lastBalanceSummary = summary;
+      if (dailyDay != null &&
+          (dailyRecord?.day != dailyDay || score > dailyRecord!.score)) {
+        dailyRecord = (day: dailyDay, score: score);
+        unawaited(saveDailyRecord(dailyDay, score));
+      }
+      if (dailyDay == null && quizPlaytestSeed == null && score > best) {
         best = score;
         unawaited(saveBest(best));
       }
@@ -1262,6 +1336,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           primary('다시 시도', loadPack),
         ] else
           primary(loading ? '불러오는 중' : '시작', loading ? null : start),
+        if (quizPlaytestSeed == null)
+          TextButton(
+            onPressed: loading || error != null
+                ? null
+                : () => start(daily: true),
+            child: const Text('오늘의 낙서 · 30초'),
+          ),
         if (offersSketchFlow && sketchFlow == null)
           TextButton(
             onPressed: () => setState(() => phase = Phase.download),
@@ -1298,6 +1379,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     balanceHistory.roundRulesReview(labelsById),
                   ),
                   child: const Text('밸런스 검수'),
+                ),
+                TextButton(
+                  onPressed: () => showQuizReview('재미 검수', [
+                    (title: '빠른 정답', value: balanceHistory.quickCorrectSummary),
+                    (title: '한 판 더', value: replayVisitSummary(replayVisits)),
+                  ], range: '최근 일반 플레이와 재도전 기록'),
+                  child: const Text('재미 검수'),
                 ),
                 const Text('그림 데이터: Google Quick, Draw! (CC BY 4.0)'),
                 const SelectableText(
@@ -1344,8 +1432,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void showQuizReview(
     String heading,
-    List<({String title, String value})> sections,
-  ) {
+    List<({String title, String value})> sections, {
+    String range = '이 기기의 최근 20판',
+  }) {
     showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -1356,7 +1445,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           mainAxisSize: MainAxisSize.min,
           spacing: 12,
           children: [
-            const Text('이 기기의 최근 20판'),
+            Text(range),
             for (final section in sections)
               Text.rich(
                 TextSpan(
@@ -1375,7 +1464,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           TextButton(
             onPressed: () async {
               final report = [
-                '$heading · 이 기기의 최근 20판',
+                '$heading · $range',
                 for (final section in sections)
                   '${section.title}\n${section.value}',
               ].join('\n\n');
@@ -1596,7 +1685,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    aiRound
+                    roundDailyDay != null
+                        ? '오늘의 낙서'
+                        : aiRound
                         ? aiDrawing
                               ? 'AI 그림'
                               : '저장된 그림'
@@ -1816,6 +1907,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           ),
           const SizedBox(width: 5),
           title('$correctStreak연속 정답!', size: 16, color: blue),
+        ],
+      );
+    } else if (now < quickCueUntil) {
+      message = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.auto_awesome_rounded, color: blue, size: 17),
+          const SizedBox(width: 4),
+          title('빠른 정답!', size: 16, color: blue),
         ],
       );
     } else if (roundResults.isEmpty) {
@@ -2100,7 +2200,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Widget resultSummary({bool compact = false}) => Column(
     children: [
-      title('시간 종료', size: compact ? 28 : 34, handwritten: true),
+      title(
+        roundDailyDay == null ? '시간 종료' : '오늘의 낙서 결과',
+        size: compact ? 28 : 34,
+        handwritten: true,
+      ),
       const SizedBox(
         width: 122,
         height: 13,
@@ -2122,7 +2226,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           ),
         ),
       ),
-      title('최고 기록 $best개', size: 17),
+      title(
+        roundDailyDay == null
+            ? '최고 기록 $best개'
+            : '오늘 최고 ${dailyRecord?.score ?? score}개',
+        size: 17,
+      ),
+      Text(
+        replayGoal(score, roundPreviousBest),
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontSize: 14),
+      ),
     ],
   );
 
@@ -2273,7 +2387,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Expanded(child: primary('한 판 더', start, fontSize: 27)),
+                      Expanded(
+                        child: primary(
+                          roundDailyDay == null ? '한 판 더' : '오늘 다시 도전',
+                          () =>
+                              start(daily: roundDailyDay != null, replay: true),
+                          fontSize: 27,
+                        ),
+                      ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: secondary(

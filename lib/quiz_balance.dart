@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:ui' show Offset;
 
+import 'fun_design.dart';
+
 int quizLevel(int score, {bool assistance = false}) =>
     max(1, min(5, 1 + score ~/ 2) - (assistance ? 1 : 0));
 
@@ -398,6 +400,13 @@ class QuizBalanceHistory {
           final skipWasFirst = skipped && row['wrongTaps'] == 0;
           final firstTap = skipWasFirst ? null : row['firstTapMs'];
           final progress = skipWasFirst ? null : row['firstTapProgress'];
+          if (correct) {
+            _funCorrect++;
+            if (wrongTaps is int &&
+                isQuickCorrect(progress is num ? progress : null, wrongTaps)) {
+              _funQuickCorrect++;
+            }
+          }
           if (progress is num) {
             roundFirstChoices++;
             if (progress < .5) roundEarlyChoices++;
@@ -545,6 +554,8 @@ class QuizBalanceHistory {
   final _byQuestion = <(String, int, bool), _QuizTotals>{};
   final _sourceComparison = <(String, int, bool), _QuizTotals>{};
   final _ruleRounds = <_RuleRound>[];
+  int _funCorrect = 0;
+  int _funQuickCorrect = 0;
   final _assisted = <int, _QuizTotals>{};
   final _promoted = <int, _QuizTotals>{};
   final _opening = _QuizTotals();
@@ -610,6 +621,10 @@ class QuizBalanceHistory {
 
   String? get levelFiveEntrySummary =>
       _levelFiveEntry.questions == 0 ? null : _levelFiveEntry.summary;
+
+  String get quickCorrectSummary => _funCorrect == 0
+      ? '정답 기록이 없어요.'
+      : '정답 $_funCorrect개 중 빠른 정답 $_funQuickCorrect개';
 
   List<({String title, String value})> roundRulesReview(
     Map<String, String> labels,

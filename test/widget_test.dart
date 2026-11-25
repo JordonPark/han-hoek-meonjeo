@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:rabbit_sketchbook/fun_design.dart';
 import 'package:rabbit_sketchbook/main.dart';
 import 'package:rabbit_sketchbook/quiz_balance.dart';
 import 'package:rabbit_sketchbook/round_rules.dart' show roundRulePresets;
@@ -24,6 +25,112 @@ class _LoadedSketchFlow implements SketchFlow {
 }
 
 void main() {
+  test('quick recognition and replay goals follow the recorded round', () {
+    expect(isQuickCorrect(.14, 0), isFalse);
+    expect(isQuickCorrect(.15, 0), isTrue);
+    expect(isQuickCorrect(.49, 1), isFalse);
+    expect(isQuickCorrect(.5, 0), isFalse);
+    expect(replayGoal(3, 5), '최고 기록까지 2개');
+    expect(replayGoal(5, 5), '다음 목표 6개');
+    expect(dailySketchDay(DateTime(2026, 11, 25, 23, 50)), 20261125);
+    expect(List.generate(8, dailySketchLevel), [1, 1, 2, 2, 2, 3, 3, 3]);
+    final visits = recordReplayVisit(['other:1', 'current:2'], 'current', 3);
+    expect(replayVisitSummary(visits), '첫 판을 끝낸 2회 중 두 번째 판 1회 · 세 번째 판 1회 시작');
+  });
+
+  testWidgets(
+    'daily sketches replay in the same order and keep an independent record',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.reset);
+      tester.platformDispatcher.accessibilityFeaturesTestValue =
+          const FakeAccessibilityFeatures(disableAnimations: true);
+      addTearDown(
+        tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
+      );
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      SharedPreferences.setMockInitialValues({'best_score': 9});
+      await tester.pumpWidget(const Sketchbook());
+      final daily = find.widgetWithText(TextButton, '오늘의 낙서 · 30초');
+      await tester.runAsync(() async {
+        for (
+          var i = 0;
+          i < 50 &&
+              (daily.evaluate().isEmpty ||
+                  tester.widget<TextButton>(daily).onPressed == null);
+          i++
+        ) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          await tester.pump();
+        }
+      });
+      final dynamic game = tester.state(find.byType(GameScreen));
+      Future<void> waitForRound() async {
+        await tester.pump();
+        for (var i = 0; i < 3; i++) {
+          await tester.pump(const Duration(seconds: 1));
+        }
+        await tester.pump(gameStartCueDuration);
+        expect(game.phase, Phase.playing);
+      }
+
+      Object question() => [
+        (game.prompt as Prompt).id,
+        game.storedDrawingIndex,
+        List<String>.of(game.options as List<String>),
+      ];
+      await tester.ensureVisible(daily);
+      await tester.tap(daily);
+      await waitForRound();
+      expect(game.deadlineMs, dailyRoundStartMs);
+      expect(game.aiDrawing, isFalse);
+      final first = question();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 620)),
+      );
+      game.answer((game.prompt as Prompt).label);
+      await tester.pump();
+      expect(find.text('빠른 정답!'), findsOneWidget);
+      expect(game.score, 1);
+      expect(game.deadlineMs, dailyRoundStartMs + correctBonusMs);
+      final second = question();
+      game.finish();
+      await tester.pumpAndSettle();
+      final preferences = await SharedPreferences.getInstance();
+      expect(parseDailyRecord(preferences.getString(dailyRecordKey))?.score, 1);
+      expect(preferences.getInt('best_score'), 9);
+      expect(preferences.getStringList(balanceHistoryKey), isNull);
+      expect(find.text('오늘 최고 1개'), findsOneWidget);
+      expect(find.text('다음 목표 2개'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, '오늘 다시 도전'));
+      await waitForRound();
+      expect(question(), first);
+      game.answer((game.prompt as Prompt).label);
+      expect(question(), second);
+      game.finish();
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(OutlinedButton, '홈으로'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, '시작'));
+      await waitForRound();
+      expect(game.deadlineMs, roundStartMs);
+      expect(game.roundDailyDay, isNull);
+      game.finish();
+      await tester.pumpAndSettle();
+      expect(find.text('최고 기록까지 9개'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, '한 판 더'));
+      await tester.pump();
+      expect(
+        replayVisitSummary(preferences.getStringList(replayVisitsKey)!),
+        '첫 판을 끝낸 1회 중 두 번째 판 1회 · 세 번째 판 0회 시작',
+      );
+      await waitForRound();
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   test('only two early wrong taps receive the longer retry delay', () {
     final rules = roundRulePresets['early-retry']!;
     expect(rules.retryDelayMs(1, .1), 800);
