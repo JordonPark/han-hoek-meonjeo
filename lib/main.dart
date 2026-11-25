@@ -157,18 +157,21 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   final missed = <(String, List<List<Offset>>)>[];
   final disabled = <String>{};
+  final finishedWrongChoices = <String>{};
   List<Prompt> pack = [];
+  Map<String, Prompt> promptsById = {};
   Map<String, String> labelsById = {};
   Map<String, List<String>> relatedById = {};
   Map<String, List<String>> outlinesById = {};
   Map<String, List<({List<String> ranked, Set<String> ambiguous})>>
   drawingOutlinesById = {};
-  Map<String, int> openingDrawingById = {};
+  Map<String, List<int>> earlyDrawingsById = {};
   final roundResults = <QuizResult>[];
   QuizBalanceHistory balanceHistory = QuizBalanceHistory(const []);
   String? lastBalanceSummary;
   int missedStreak = 0;
   bool assistance = false;
+  bool enteringLevelFive = false;
   bool questionLogged = false;
   int? firstTapMs;
   double? firstTapProgress;
@@ -199,12 +202,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool sketchFlowSetupSeen = false;
   bool openingSketchFlow = false;
   SketchFlowTransfer? modelTransfer;
-  bool preparingDrawing = false;
   bool aiRound = false;
   bool aiDrawing = false;
   String? modelStatus;
   int? modelPercent;
-  final generated = <String, List<List<Offset>>>{};
+  final generated =
+      <String, ({List<List<Offset>> drawing, QuizOutlineMatch outline})>{};
   int round = 0;
 
   int get elapsed => clock.elapsedMilliseconds;
@@ -325,7 +328,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           round == generation &&
           deck.contains(selected) &&
           result.isNotEmpty) {
-        generated[selected.id] = result;
+        final id = selected.id;
+        final related = {
+          ...relatedById[id]!.take(6),
+          ...quizConfusableWith(id),
+        };
+        final rivals = {...outlinesById[id]!.take(12), ...related};
+        final outline = assessQuizOutline(result, selected.drawings, {
+          for (final rival in rivals)
+            if (promptsById[rival] case final prompt?) rival: prompt.drawings,
+        }, plausibleRivals: related);
+        if (outline.usable) generated[id] = (drawing: result, outline: outline);
       }
     } catch (_) {
       // If inference fails, this question can use its bundled drawing.
@@ -372,13 +385,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       final visualRanks = <String, List<String>>{};
       final drawingRanks =
           <String, List<({List<String> ranked, Set<String> ambiguous})>>{};
-      final openingDrawings = <String, int>{};
+      final earlyDrawings = <String, List<int>>{};
       for (final question in loaded) {
         final row = outlines[question.id] as Map;
         final similar = (row['similar'] as List).cast<String>();
         final byDrawing = (row['visualByDrawing'] as List).cast<List>();
         final ambiguous = (row['ambiguousByDrawing'] as List).cast<List>();
-        final opening = row['opening'] as int;
+        final early = (row['earlyByDrawing'] as List).cast<int>();
         final reviewed = reviewedStoredQuestions[question.id];
         if (similar.toSet().length != 24 ||
             similar.contains(question.id) ||
@@ -393,8 +406,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               (ids) =>
                   !ids.contains(question.id) && ids.every(labels.containsKey),
             ) ||
-            opening < 0 ||
-            opening >= question.drawings.length) {
+            early.length != question.drawings.length ||
+            early.toSet().length != early.length ||
+            early.any((index) => index < 0 || index >= early.length)) {
           throw const FormatException('Invalid quiz outlines');
         }
         visualRanks[question.id] = similar;
@@ -405,7 +419,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             ambiguous: ambiguous[index].cast<String>().toSet(),
           ),
         );
-        openingDrawings[question.id] = opening;
+        earlyDrawings[question.id] = early;
       }
       if (ranked.length != labels.length ||
           labels.keys.any((id) {
@@ -420,11 +434,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (mounted) {
         setState(() {
           pack = loaded;
+          promptsById = {for (final prompt in loaded) prompt.id: prompt};
           labelsById = labels;
           relatedById = ranked;
           outlinesById = visualRanks;
           drawingOutlinesById = drawingRanks;
-          openingDrawingById = openingDrawings;
+          earlyDrawingsById = earlyDrawings;
           loading = false;
         });
       }
@@ -516,21 +531,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       round++;
       generated.clear();
       aiRound = sketchFlow != null;
-      preparingDrawing = aiRound;
-      if (!preparingDrawing) nextQuestion();
+      prompt = null;
+      nextQuestion();
     });
     if (finishingSetup) unawaited(saveSketchFlowSetup());
-    if (preparingDrawing) {
-      await prepareDrawing(
-        upcomingPrompt(1, opening: true),
-        1,
-      ).timeout(const Duration(seconds: 6), onTimeout: () {});
-      if (!mounted || phase != Phase.preparing) return;
-      setState(() {
-        preparingDrawing = false;
-        nextQuestion();
-      });
-    }
     while (countdown > 0) {
       audio.play(GameSound.countdown);
       await Future<void>.delayed(const Duration(seconds: 1));
@@ -577,31 +581,27 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Prompt upcomingPrompt(
     int nextLevel, {
-    bool opening = false,
+    bool earlyDrawing = false,
     bool easing = false,
   }) {
     if (quizPlaytestSeed != null) return deck.last;
-    if (opening) {
-      for (final candidate in deck.reversed) {
-        if (openingQuestions.contains(candidate.id) &&
-            !balanceHistory.tooHardForEarlyLevels(candidate.id)) {
-          return candidate;
-        }
-      }
-    }
-    if (nextLevel <= 2 || easing) {
-      for (final candidate in deck.reversed) {
-        if (familiarQuestions.contains(candidate.id) &&
-            !balanceHistory.tooHardForEarlyLevels(candidate.id)) {
-          return candidate;
-        }
-      }
-    }
-    return deck.last;
+    final previous = prompt?.id;
+    return promptsById[chooseQuizQuestion(
+      shuffled: deck.reversed.map((prompt) => prompt.id),
+      earlyDrawing: earlyDrawing,
+      familiar: nextLevel <= 2 || easing,
+      tooHard: balanceHistory.tooHardForEarlyLevels,
+      repeatsPrevious: (id) =>
+          previous != null &&
+          (relatedById[previous]!.take(6).contains(id) ||
+              relatedById[id]!.take(6).contains(previous) ||
+              outlinesById[previous]!.take(6).contains(id) ||
+              outlinesById[id]!.take(6).contains(previous)),
+    )]!;
   }
 
   void prefetchDrawing() {
-    if (aiRound && deck.isNotEmpty) {
+    if (aiRound && deck.isNotEmpty && roundResults.isNotEmpty) {
       final nextLevel = quizLevel(score + 1);
       unawaited(prepareDrawing(upcomingPrompt(nextLevel), nextLevel));
     }
@@ -620,15 +620,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       finish();
       return;
     }
-    final baseLevel = quizLevel(score);
-    assistance = quizPlaytestSeed == null && missedStreak >= 2 && baseLevel > 1;
+    assistance = quizPlaytestSeed == null && missedStreak >= 2;
     if (missedStreak >= 2) missedStreak = 0;
     level = quizPlaytestSeed == null
         ? quizLevel(score, assistance: assistance)
         : quizPlaytestLevel.clamp(1, 5);
+    final earlyDrawing = quizPlaytestSeed == null && roundResults.length < 2;
+    enteringLevelFive =
+        quizPlaytestSeed == null &&
+        outcome == QuizOutcome.correct &&
+        score == 8;
     final selected = upcomingPrompt(
       level,
-      opening: outcome == null,
+      earlyDrawing: earlyDrawing,
       easing: assistance,
     );
     deck.remove(selected);
@@ -637,43 +641,47 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     firstTapMs = null;
     firstTapProgress = null;
     final reviewed = reviewedStoredQuestions[selected.id];
-    final variants =
-        reviewed ??
-        (List.generate(selected.drawings.length, (i) => i)..sort(
-          (a, b) => selected.drawings[a].length.compareTo(
-            selected.drawings[b].length,
-          ),
-        ));
-    final pool =
-        reviewed ??
-        (level <= 2
-            ? variants.take((variants.length + 1) ~/ 2).toList()
-            : level >= 4
-            ? variants.skip(variants.length ~/ 2).toList()
-            : variants);
     final candidate = generated.remove(selected.id);
-    final fresh = usesStoredDrawing(selected.id, level) ? null : candidate;
-    final storedIndex = fresh == null
-        ? (outcome == null || level == 1 || assistance
-              ? reviewed?.first ?? openingDrawingById[selected.id]!
-              : pool[random.nextInt(pool.length)])
-        : null;
-    aiDrawing = fresh != null;
-    drawing = fresh ?? selected.drawings[storedIndex!];
-    final outlineIndex =
-        storedIndex ??
-        (level >= 4 ? closestQuizOutline(drawing, selected.drawings) : null);
-    final outline = outlineIndex == null
+    final fresh =
+        earlyDrawing || assistance || usesStoredDrawing(selected.id, level)
         ? null
-        : drawingOutlinesById[selected.id]![outlineIndex];
+        : candidate;
+    final early = earlyDrawingsById[selected.id]!;
+    int? storedIndex;
+    if (fresh == null) {
+      if (earlyDrawing || level == 1 || assistance) {
+        storedIndex = reviewed?.first ?? early.first;
+      } else {
+        var pool = reviewed ?? early;
+        if (reviewed == null && level == 2) {
+          pool = early.take((early.length + 1) ~/ 2).toList();
+        } else if (reviewed == null && level >= 4) {
+          final byStrokeCount = [...early]
+            ..sort(
+              (a, b) => selected.drawings[a].length.compareTo(
+                selected.drawings[b].length,
+              ),
+            );
+          pool = byStrokeCount.skip(byStrokeCount.length ~/ 2).toList();
+        }
+        storedIndex = pool[random.nextInt(pool.length)];
+      }
+    }
+    aiDrawing = fresh != null;
+    drawing = fresh?.drawing ?? selected.drawings[storedIndex!];
+    final outline = storedIndex == null
+        ? null
+        : drawingOutlinesById[selected.id]![storedIndex];
     prefetchDrawing();
     final distractors = quizDistractors(
       answer: selected.id,
       candidates: labelsById.keys.toSet(),
       ranked: relatedById[selected.id]!,
-      outlineRanked: outline?.ranked ?? outlinesById[selected.id]!,
-      indistinguishable: storedIndex == null ? const {} : outline!.ambiguous,
+      outlineRanked: outline?.ranked ?? fresh!.outline.ranked,
+      indistinguishable: outline?.ambiguous ?? fresh!.outline.ambiguous,
       level: level,
+      enteringLevelFive: enteringLevelFive,
+      recovery: assistance,
       random: random,
     );
     options = [
@@ -682,6 +690,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         labelsById[id]!,
     ]..shuffle(random);
     disabled.clear();
+    finishedWrongChoices.clear();
     questionAt = elapsed;
     lockedUntil = 0;
     advanceAfterWrongAt = null;
@@ -696,10 +705,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         questionId: prompt!.id,
         generated: aiDrawing,
         assisted: assistance,
+        enteringLevelFive: enteringLevelFive,
         outcome: outcome,
         wrongTaps: disabled.length,
         firstTapMs: firstTapMs,
         firstTapProgress: firstTapProgress,
+        finishedWrongChoices: finishedWrongChoices.toList(),
         durationMs: elapsed - questionAt,
       ),
     );
@@ -768,6 +779,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         audio.play(GameSound.wrong);
         disabled.add(option);
         final now = elapsed;
+        if (strokeProgressAt(
+              elapsedMs: now,
+              questionStartedMs: questionAt,
+              level: level,
+            ) >=
+            1) {
+          finishedWrongChoices.add(option);
+        }
         lockedUntil =
             now + (disabled.length == 1 ? firstWrongLockMs : repeatWrongLockMs);
         if (disabled.length == 3) {
@@ -1221,6 +1240,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   void showBalanceDetails() {
     final history = balanceHistory;
     final candidates = history.reviewCandidates();
+    final finishedPairs = history.finishedPairCandidates();
     showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1233,13 +1253,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           children: [
             if (history.openingSummary case final summary?)
               Text('첫 문제 · $summary'),
+            if (history.secondSummary case final summary?)
+              Text('두 번째 문제 · $summary'),
+            if (history.earlyFirstCorrectSummary case final summary?)
+              Text('첫 두 문제에서 첫 정답 · $summary'),
             for (var level = 1; level <= 5; level++)
               if (history.hasLevel(level)) ...[
                 Text(
                   '$level단계\nAI 그림 · ${history.describe(level, generated: true)}\n\n'
                   '저장된 그림 · ${history.describe(level, generated: false)}',
                 ),
-                if (history.promotedSummary(level) case final summary?)
+                if (level == 5 && history.levelFiveEntrySummary != null)
+                  Text('5단계 첫 문제 · ${history.levelFiveEntrySummary}')
+                else if (history.promotedSummary(level) case final summary?)
                   Text('승급 직후 · $summary'),
                 if (history.assistedSummary(level) case final summary?)
                   Text('난이도 완화 직후 · $summary'),
@@ -1254,6 +1280,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 '${labelsById[candidate.id] ?? candidate.id} · ${candidate.level}단계 · '
                 '${candidate.generated ? 'AI' : '저장된 그림'} · 정답 ${candidate.correct}/${candidate.total} '
                 '· 건너뛰기 ${candidate.skips}회',
+              ),
+            if (finishedPairs.isNotEmpty)
+              const Text(
+                '완성 후 반복 오답',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            for (final pair in finishedPairs)
+              Text(
+                '${labelsById[pair.id] ?? pair.id} → ${pair.choice} ${pair.count}회',
               ),
           ],
         ),
@@ -1284,19 +1319,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             ? Duration.zero
             : const Duration(milliseconds: 160),
         child: KeyedSubtree(
-          key: ValueKey(preparingDrawing ? -1 : countdown),
-          child: !preparingDrawing && countdown == 0
+          key: ValueKey(countdown),
+          child: countdown == 0
               ? gameStartCue(MediaQuery.disableAnimationsOf(context))
-              : title(
-                  preparingDrawing ? '첫 그림 그리는 중' : '$countdown',
-                  size: preparingDrawing ? 28 : 46,
-                  color: blue,
-                ),
+              : title('$countdown', size: 46, color: blue),
         ),
       ),
     ),
-    if (preparingDrawing)
-      const Text('준비가 오래 걸리면 기본 그림으로 시작해요.', textAlign: TextAlign.center),
   ]);
 
   Widget gameStartCue(bool reducedMotion) {

@@ -85,7 +85,7 @@ void main() {
     },
   );
 
-  test('AI silhouettes select the matching stored outline reference', () {
+  test('AI outlines keep recognizable drawings and block ambiguous rivals', () {
     final vertical = [
       [const Offset(.5, .1), const Offset(.5, .9)],
     ];
@@ -95,7 +95,75 @@ void main() {
     final leftToRight = [
       [const Offset(.9, .5), const Offset(.1, .5)],
     ];
-    expect(closestQuizOutline(leftToRight, [vertical, horizontal]), 1);
+    final matching = assessQuizOutline(
+      leftToRight,
+      [horizontal],
+      {
+        'vertical': [vertical],
+        'alias': [horizontal],
+      },
+      plausibleRivals: {'alias'},
+    );
+    expect(matching.usable, isTrue);
+    expect(matching.ranked.first, 'alias');
+    expect(matching.ambiguous, {'alias'});
+    expect(
+      assessQuizOutline(
+        leftToRight,
+        [vertical],
+        {
+          'rival': [horizontal],
+        },
+        plausibleRivals: {'rival'},
+      ).usable,
+      isFalse,
+    );
+  });
+
+  test(
+    'first level-five question mixes two silhouettes with a related option',
+    () {
+      final profiles = [
+        for (final entering in [true, false])
+          quizDistractors(
+            answer: 'answer',
+            candidates: {'a', 'b', 'c', 'd', 'x', 'y', 'z'},
+            ranked: ['a', 'b', 'c', 'd'],
+            outlineRanked: ['a', 'b', 'c'],
+            level: 5,
+            enteringLevelFive: entering,
+            random: Random(42),
+          ).similar,
+      ];
+      expect(profiles.first, ['a', 'b', 'd']);
+      expect(profiles.last, ['a', 'b', 'c']);
+      final recovery = quizDistractors(
+        answer: 'answer',
+        candidates: {'a', 'b', 'c', 'd', 'x', 'y', 'z'},
+        ranked: ['a', 'b', 'c', 'd'],
+        outlineRanked: ['a', 'b', 'c'],
+        level: 4,
+        recovery: true,
+        random: Random(42),
+      );
+      expect(recovery.similar, ['d']);
+      expect(recovery.distinct, hasLength(2));
+    },
+  );
+
+  test('selection favors readable openings and separates similar prompts', () {
+    String pick(List<String> deck, {bool early = false}) => chooseQuizQuestion(
+      shuffled: deck,
+      earlyDrawing: early,
+      familiar: false,
+      tooHard: (id) => id == 'star',
+      repeatsPrevious: (id) => id == 'moon' || id == 'cloud',
+    );
+
+    expect(pick(['moon', 'cloud', 'star', 'bicycle'], early: true), 'bicycle');
+    expect(pick(['moon', 'cloud', 'elephant'], early: true), 'elephant');
+    expect(pick(['moon', 'cloud'], early: true), 'moon');
+    expect(pick(['moon', 'elephant', 'cloud']), 'elephant');
   });
 
   test('every shipped outline can supply three eligible choices at all five levels', () {
@@ -111,9 +179,14 @@ void main() {
       final visual = row['visualByDrawing'] as List;
       final ambiguous = row['ambiguousByDrawing'] as List;
       expect(visual, hasLength(6));
+      expect(
+        row['earlyByDrawing'],
+        unorderedEquals(List.generate(6, (i) => i)),
+      );
       for (final (index, ranks) in visual.indexed) {
         final blocked = (ambiguous[index] as List).cast<String>().toSet();
-        for (var level = 1; level <= 5; level++) {
+        for (var profile = 1; profile <= 6; profile++) {
+          final level = min(5, profile);
           final choices = quizDistractors(
             answer: answer,
             candidates: candidates,
@@ -121,10 +194,11 @@ void main() {
             outlineRanked: (ranks as List).cast<String>(),
             indistinguishable: blocked,
             level: level,
+            enteringLevelFive: profile == 6,
             random: random,
           );
           final distinct = {...choices.similar, ...choices.distinct};
-          final reason = '$answer drawing $index level $level';
+          final reason = '$answer drawing $index profile $profile';
           expect(distinct, hasLength(3), reason: reason);
           expect(
             distinct.intersection({answer, ...blocked}),
@@ -144,14 +218,18 @@ void main() {
         QuizOutcome outcome, {
         String id = 'firetruck',
         bool assisted = false,
+        bool enteringLevelFive = false,
+        List<String> wrongChoices = const [],
       }) => QuizResult(
         level: level,
         questionId: id,
         generated: false,
         assisted: assisted,
+        enteringLevelFive: enteringLevelFive,
         outcome: outcome,
         wrongTaps: 0,
         firstTapMs: outcome == QuizOutcome.skipped ? 8000 : 1000,
+        finishedWrongChoices: wrongChoices,
         durationMs: 8000,
       ).toJson();
 
@@ -163,12 +241,21 @@ void main() {
             row(2, QuizOutcome.skipped),
             row(2, QuizOutcome.skipped),
             row(1, QuizOutcome.correct, assisted: true, id: 'fish'),
-            row(2, QuizOutcome.skipped),
-            row(2, QuizOutcome.wrong),
+            row(2, QuizOutcome.skipped, wrongChoices: ['버스']),
+            row(2, QuizOutcome.wrong, wrongChoices: ['버스']),
+            row(5, QuizOutcome.correct, enteringLevelFive: true),
           ],
         }),
       ]);
       expect(history.openingSummary, '정답 1/1 · 첫 선택 1.0초 · 건너뛰기 0%');
+      expect(history.secondSummary, '정답 1/1 · 첫 선택 1.0초 · 건너뛰기 0%');
+      expect(history.earlyFirstCorrectSummary, '1/1판 · 평균 8.0초');
+      expect(history.levelFiveEntrySummary, '정답 1/1 · 첫 선택 1.0초 · 건너뛰기 0%');
+      expect(history.finishedPairCandidates().single, (
+        id: 'firetruck',
+        choice: '버스',
+        count: 2,
+      ));
       expect(history.promotedSummary(2), '정답 0/1 · 첫 선택 — · 건너뛰기 100%');
       expect(history.assistedSummary(1), '정답 1/1 · 첫 선택 1.0초 · 건너뛰기 0%');
       expect(history.tooHardForEarlyLevels('firetruck'), isTrue);
@@ -481,7 +568,8 @@ void main() {
       );
       expect(find.text('0점'), findsOneWidget);
       final options = game.options as List<String>;
-      final answer = (game.prompt as Prompt).label;
+      final firstPrompt = game.prompt as Prompt;
+      final answer = firstPrompt.label;
       final correctChoice = find.widgetWithText(OutlinedButton, answer);
       final choicePosition = tester.getCenter(correctChoice);
       expect(familiarQuestions, contains((game.prompt as Prompt).id));
@@ -541,6 +629,14 @@ void main() {
       expect(retryCue, findsOneWidget);
       await tester.tap(find.widgetWithText(OutlinedButton, answer));
       await tester.pump();
+      final secondPrompt = game.prompt as Prompt;
+      expect(openingQuestions, contains(secondPrompt.id));
+      expect(secondPrompt.id, isNot(firstPrompt.id));
+      expect(game.aiDrawing, isFalse);
+      final earlyIndex =
+          reviewedStoredQuestions[secondPrompt.id]?.first ??
+          (game.earlyDrawingsById[secondPrompt.id] as List<int>).first;
+      expect(game.drawing, same(secondPrompt.drawings[earlyIndex]));
       expect(retryCue, findsNothing);
       expect(game.deadlineMs, roundStartMs + correctBonusMs);
       expect(find.text('+1초'), findsOneWidget);

@@ -50,14 +50,19 @@ def main():
     semantic = json.loads((assets / 'related_questions.json').read_text(encoding='utf-8'))
     for i, label in enumerate(labels):
         neighbors = [labels[j] for j in np.argsort(-similarity[i], kind='stable') if j != i][:24]
-        early = unit(np.array([outline(example, prefix=.45) for example in drawings[i]]))
-        scores = early @ prototypes.T
-        own = scores[:, i].copy()
-        scores[:, i] = 0
-        opening = int(np.argmax(own - scores.max(axis=1) + vectors[i] @ prototypes[i] * .4))
+        early_margins = []
+        for prefix in (.25, .45):
+            partial = unit(np.array([outline(example, prefix=prefix) for example in drawings[i]]))
+            scores = partial @ prototypes.T
+            own = scores[:, i].copy()
+            scores[:, i] = 0
+            early_margins.append(own - scores.max(axis=1))
         complete = vectors[i] @ prototypes.T
         own_complete = complete[:, i].copy()
         complete[:, i] = 0
+        complete_margin = own_complete - complete.max(axis=1)
+        early_rank = np.argsort(-(.35 * early_margins[0] + .45 * early_margins[1]
+                                  + .20 * complete_margin), kind='stable').tolist()
         sample_neighbors = pairs[i].max(axis=-1)
         visual = []
         ambiguous = []
@@ -66,12 +71,13 @@ def main():
             visual.append([labels[j] for j in order[:12]])
             ambiguous.append([labels[j] for j in order
                               if scores_by_label[j] >= max(.90, own_complete[sample] + .05)])
-        result[label] = {'similar': neighbors, 'opening': opening,
+        result[label] = {'similar': neighbors, 'earlyByDrawing': early_rank,
                          'visualByDrawing': visual, 'ambiguousByDrawing': ambiguous}
+        opening = early_rank[0]
         review.append([
             label, labels_ko[label], opening + 1,
-            f'{own[opening] - scores[opening].max():.3f}',
-            f'{own_complete[opening] - complete[opening].max():.3f}',
+            f'{early_margins[1][opening]:.3f}',
+            f'{complete_margin[opening]:.3f}',
             ', '.join(labels_ko[value] for value in semantic[label][:5]),
             ', '.join(labels_ko[value] for value in neighbors[:5]),
         ])
