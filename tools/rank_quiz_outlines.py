@@ -1,5 +1,6 @@
 """Rank Quick, Draw! categories by the coarse outlines of their quiz drawings."""
 
+import csv
 import json
 from pathlib import Path
 
@@ -44,6 +45,9 @@ def main():
     pairs = (vectors.reshape(-1, 256) @ vectors.reshape(-1, 256).T).reshape(len(labels), 6, len(labels), 6)
     similarity = pairs.max(axis=3).mean(axis=1)
     result = {}
+    review = []
+    labels_ko = {question['id']: question['label'] for question in questions}
+    semantic = json.loads((assets / 'related_questions.json').read_text(encoding='utf-8'))
     for i, label in enumerate(labels):
         neighbors = [labels[j] for j in np.argsort(-similarity[i], kind='stable') if j != i][:24]
         early = unit(np.array([outline(example, prefix=.45) for example in drawings[i]]))
@@ -52,8 +56,27 @@ def main():
         scores[:, i] = 0
         opening = int(np.argmax(own - scores.max(axis=1) + vectors[i] @ prototypes[i] * .4))
         result[label] = {'similar': neighbors, 'opening': opening}
+        complete = vectors[i] @ prototypes.T
+        own_complete = complete[:, i].copy()
+        complete[:, i] = 0
+        review.append([
+            label, labels_ko[label], opening + 1,
+            f'{own[opening] - scores[opening].max():.3f}',
+            f'{own_complete[opening] - complete[opening].max():.3f}',
+            ', '.join(labels_ko[value] for value in semantic[label][:5]),
+            ', '.join(labels_ko[value] for value in neighbors[:5]),
+        ])
     data = '{\n' + ',\n'.join(f'  {json.dumps(label)}: {json.dumps(value)}' for label, value in result.items()) + '\n}\n'
     (assets / 'outline_questions.json').write_text(data, encoding='utf-8')
+    docs = assets.parent / 'docs'
+    docs.mkdir(exist_ok=True)
+    with (docs / 'quiz-level-review.csv').open('w', encoding='utf-8-sig', newline='') as handle:
+        writer = csv.writer(handle, lineterminator='\n')
+        writer.writerow([
+            '제시어 ID', '제시어', '첫 문제 샘플 번호', '초반 윤곽 여유', '완성 윤곽 여유',
+            '의미 유사 후보', '윤곽 유사 후보', '친숙도 검수', '구분 특징', 'AI 생성 검수',
+        ])
+        writer.writerows(row + ['', '', ''] for row in review)
 
 
 if __name__ == '__main__':

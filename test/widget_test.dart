@@ -238,6 +238,18 @@ void main() {
         tester.getSize(find.widgetWithText(OutlinedButton, longOption)).height,
         greaterThanOrEqualTo(48),
       );
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await tester.pump();
+      final enlargedOptions = find.byType(OutlinedButton);
+      expect(enlargedOptions, findsNWidgets(4));
+      expect(tester.getSize(enlargedOptions.first).width, closeTo(238, 0.1));
+      expect(
+        tester.getTopLeft(enlargedOptions.at(1)).dy,
+        greaterThan(tester.getBottomLeft(enlargedOptions.first).dy),
+      );
+      expect(tester.takeException(), isNull);
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
       game.setState(() => game.options = original);
       await tester.pump();
       final sketchbook = find.byKey(const ValueKey('play-sketchbook'));
@@ -312,11 +324,18 @@ void main() {
         QuizOutcome.correct,
       );
       expect((game.roundResults as List<QuizResult>).single.wrongTaps, 1);
+      tester.platformDispatcher.accessibilityFeaturesTestValue =
+          const FakeAccessibilityFeatures(disableAnimations: true);
+      addTearDown(
+        tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
+      );
+      await tester.pump();
       game.answer((game.prompt as Prompt).label);
       game.bonusGrantedMs = maxRoundBonusMs;
       final cappedDeadline = game.deadlineMs;
       game.answer((game.prompt as Prompt).label);
       await tester.pump();
+      expect(canvas, findsOneWidget);
       expect(game.deadlineMs, cappedDeadline);
       expect(find.text('3연속 정답!'), findsOneWidget);
       game.deadlineMs = (game.elapsed as int) + 9000;

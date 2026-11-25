@@ -21,6 +21,17 @@ const correctBonusMs = 1000;
 const maxRoundBonusMs = 15000;
 const skipPenaltyMs = 3000;
 const skipWaitMs = 2000;
+final quizPlaytestSeed = int.tryParse(
+  const String.fromEnvironment('QUIZ_PLAYTEST_SEED'),
+);
+const quizPlaytestLevel = int.fromEnvironment(
+  'QUIZ_PLAYTEST_LEVEL',
+  defaultValue: 3,
+);
+String get balanceHistoryKey =>
+    quizPlaytestSeed == null ? 'recent_quiz_balance' : 'quiz_playtest_history';
+String get balanceSummaryKey =>
+    quizPlaytestSeed == null ? 'last_balance_summary' : 'quiz_playtest_summary';
 
 double strokeProgressAt({
   required int elapsedMs,
@@ -126,7 +137,7 @@ class GameScreen extends StatefulWidget {
 }
 
 class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
-  final random = Random();
+  Random random = Random();
   final clock = Stopwatch();
   final audio = GameAudio();
 
@@ -144,11 +155,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool assistance = false;
   bool questionLogged = false;
   int? firstTapMs;
+  double? firstTapProgress;
   List<Prompt> deck = [];
   List<String> options = [];
   List<List<Offset>> drawing = [];
   Prompt? prompt;
-  Phase phase = SketchFlow.available ? Phase.download : Phase.home;
+  Phase phase = SketchFlow.available && quizPlaytestSeed == null
+      ? Phase.download
+      : Phase.home;
   Timer? refresh;
   String? error;
   int score = 0;
@@ -196,7 +210,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     unawaited(loadPack());
     unawaited(loadPreferences());
-    if (SketchFlow.available) unawaited(checkModel());
+    if (SketchFlow.available && quizPlaytestSeed == null) {
+      unawaited(checkModel());
+    }
   }
 
   Future<void> checkModel() async {
@@ -371,12 +387,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       final preferences = await SharedPreferences.getInstance();
       if (!mounted) return;
       balanceHistory = QuizBalanceHistory(
-        preferences.getStringList('recent_quiz_balance') ?? [],
+        preferences.getStringList(balanceHistoryKey) ?? [],
       );
       setState(() {
         best = max(best, preferences.getInt('best_score') ?? 0);
         lastBalanceSummary =
-            preferences.getString('last_balance_summary') ?? lastBalanceSummary;
+            preferences.getString(balanceSummaryKey) ?? lastBalanceSummary;
         if (!audioSettingsChanged) {
           audio.saveSettings(
             music: preferences.getBool('game_music') ?? true,
@@ -420,7 +436,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Future<void> start() async {
     if (pack.isEmpty || phase == Phase.preparing || playing) return;
-    if (SketchFlow.available && sketchFlow == null) {
+    if (SketchFlow.available &&
+        quizPlaytestSeed == null &&
+        sketchFlow == null) {
       setState(() => phase = Phase.download);
       return;
     }
@@ -432,6 +450,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       missed.clear();
       roundResults.clear();
       missedStreak = 0;
+      final seed = quizPlaytestSeed;
+      if (seed != null) random = Random(seed);
       deck = List<Prompt>.of(pack)..shuffle(random);
       clock.reset();
       deadlineMs = roundStartMs;
@@ -501,6 +521,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Prompt upcomingPrompt(int nextLevel, {bool opening = false}) {
+    if (quizPlaytestSeed != null) return deck.last;
     if (opening) {
       for (final candidate in deck.reversed) {
         if (openingQuestions.contains(candidate.id)) return candidate;
@@ -530,14 +551,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       return;
     }
     final baseLevel = quizLevel(score);
-    assistance = missedStreak >= 2 && baseLevel > 1;
+    assistance = quizPlaytestSeed == null && missedStreak >= 2 && baseLevel > 1;
     if (missedStreak >= 2) missedStreak = 0;
-    level = quizLevel(score, assistance: assistance);
+    level = quizPlaytestSeed == null
+        ? quizLevel(score, assistance: assistance)
+        : quizPlaytestLevel.clamp(1, 5);
     final selected = upcomingPrompt(level, opening: outcome == null);
     deck.remove(selected);
     prompt = selected;
     questionLogged = false;
     firstTapMs = null;
+    firstTapProgress = null;
     final variants = List<List<List<Offset>>>.of(selected.drawings)
       ..sort((a, b) => a.length.compareTo(b.length));
     final pool = level <= 2
@@ -587,6 +611,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         outcome: outcome,
         wrongTaps: disabled.length,
         firstTapMs: firstTapMs,
+        firstTapProgress: firstTapProgress,
         durationMs: elapsed - questionAt,
       ),
     );
@@ -596,18 +621,30 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final current = jsonEncode({
       'durationMs': elapsed,
       'score': score,
+      if (quizPlaytestSeed != null) 'playtestSeed': quizPlaytestSeed,
       'questions': roundResults.map((result) => result.toJson()).toList(),
     });
     try {
       final preferences = await SharedPreferences.getInstance();
-      final rounds = preferences.getStringList('recent_quiz_balance') ?? [];
+      final rounds = preferences.getStringList(balanceHistoryKey) ?? [];
       final recent = [current, ...rounds.take(19)];
-      await preferences.setStringList('recent_quiz_balance', recent);
+      await preferences.setStringList(balanceHistoryKey, recent);
       balanceHistory = QuizBalanceHistory(recent);
-      await preferences.setString('last_balance_summary', summary);
+      await preferences.setString(balanceSummaryKey, summary);
     } catch (_) {
       // Statistics remain visible for the current session.
     }
+  }
+
+  void noteFirstTap() {
+    if (firstTapMs != null) return;
+    final now = elapsed;
+    firstTapMs = now - questionAt;
+    firstTapProgress = strokeProgressAt(
+      elapsedMs: now,
+      questionStartedMs: questionAt,
+      level: level,
+    );
   }
 
   void answer(String option) {
@@ -617,7 +654,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       return;
     }
     if (elapsed < lockedUntil || disabled.contains(option)) return;
-    firstTapMs ??= elapsed - questionAt;
+    noteFirstTap();
     setState(() {
       if (option == prompt!.label) {
         audio.play(GameSound.correct);
@@ -659,7 +696,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (!canSkip) return;
     correctStreak = 0;
     streakVisibleUntil = 0;
-    firstTapMs ??= elapsed - questionAt;
+    noteFirstTap();
     deadlineMs -= skipPenaltyMs;
     if (remainingMs == 0) {
       recordQuestion(QuizOutcome.skipped);
@@ -700,7 +737,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     setState(() {
       phase = Phase.results;
       lastBalanceSummary = summary;
-      if (score > best) {
+      if (quizPlaytestSeed == null && score > best) {
         best = score;
         unawaited(saveBest(best));
       }
@@ -824,6 +861,30 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   double screenGutter(double width) => width < 320 ? 8 : 16;
 
+  Widget secondary(
+    String label,
+    VoidCallback? action, {
+    double fontSize = 27,
+  }) => OutlinedButton(
+    style: OutlinedButton.styleFrom(
+      foregroundColor: ink,
+      backgroundColor: const Color(0xccfff8ea),
+      minimumSize: const Size(0, 55),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(19)),
+      side: const BorderSide(color: ink, width: 1.5),
+      textStyle: TextStyle(
+        fontFamily: 'Gaegu',
+        fontSize: fontSize,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+    onPressed: action,
+    child: FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Text(label, maxLines: 1, softWrap: false),
+    ),
+  );
+
   Widget spacedPage(
     List<Widget> sections, {
     MainAxisAlignment distribution = MainAxisAlignment.spaceBetween,
@@ -909,11 +970,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             primary('시작', loading || error != null ? null : start)
           else if (openingSketchFlow)
             if (transferring)
-              OutlinedButton(
-                onPressed: modelTransfer!.paused || progress == 100
+              secondary(
+                '일시정지',
+                modelTransfer!.paused || progress == 100
                     ? null
                     : () => setState(() => modelTransfer!.pause()),
-                child: const Text('일시정지'),
               )
             else
               const SizedBox(height: 48)
@@ -929,10 +990,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               enableModel,
             ),
             const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: () => setState(() => phase = Phase.home),
-              child: const Text('나중에'),
-            ),
+            secondary('나중에', () => setState(() => phase = Phase.home)),
           ],
         ],
       ),
@@ -945,6 +1003,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         appTitle(),
         const SizedBox(height: 10),
         title('60초 동안 그림을 맞혀요', size: 21),
+        const SizedBox(height: 4),
+        const Text('정답 +1초 · 건너뛰기 −3초', textAlign: TextAlign.center),
       ],
     ),
     Padding(
@@ -1026,6 +1086,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void showBalanceDetails() {
     final history = balanceHistory;
+    final candidates = history.reviewCandidates();
     showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1040,8 +1101,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               if (history.hasLevel(level))
                 Text(
                   '$level단계\nAI 그림 · ${history.describe(level, generated: true)}\n\n'
-                  '저장된 그림 · ${history.describe(level, generated: false)}',
+                  '저장된 그림 · ${history.describe(level, generated: false)}'
+                  '${history.assistedSummary(level) == null ? '' : '\n${history.assistedSummary(level)}'}',
                 ),
+            if (candidates.isNotEmpty)
+              const Text(
+                '검수 후보',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            for (final candidate in candidates)
+              Text(
+                '${labelsById[candidate.id] ?? candidate.id} · ${candidate.level}단계 · '
+                '${candidate.generated ? 'AI' : '저장된 그림'} 정답 ${candidate.correct}/${candidate.total}',
+              ),
           ],
         ),
         actions: [
@@ -1089,12 +1161,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       final gutter = constraints.maxWidth < 320 ? 4.0 : 12.0;
       final contentWidth = max(0.0, constraints.maxWidth - 2 * gutter);
       final sideBySide = contentWidth >= 420;
+      final largeText = MediaQuery.textScalerOf(context).scale(20) >= 32;
+      final singleColumn = sideBySide || (largeText && contentWidth < 360);
       final canvasSize = sideBySide
           ? min(
               (contentWidth - 20) * 0.60,
               max(150.0, constraints.maxHeight - 140),
             )
-          : min(contentWidth, max(130.0, constraints.maxHeight - 285));
+          : min(
+              contentWidth,
+              max(130.0, constraints.maxHeight - (singleColumn ? 390 : 285)),
+            );
       final progress = strokeProgressAt(
         elapsedMs: elapsed,
         questionStartedMs: questionAt,
@@ -1199,7 +1276,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       );
       final answers = Column(
         children: [
-          if (sideBySide)
+          if (singleColumn)
             for (final option in options)
               Padding(
                 padding: const EdgeInsets.only(bottom: 10),
@@ -1220,7 +1297,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           Semantics(
             liveRegion: true,
             child: SizedBox(
-              height: 22,
+              height: largeText ? 42 : 22,
               child: elapsed < lockedUntil
                   ? title('틀렸어요', size: 18, color: const Color(0xffa33830))
                   : elapsed < streakVisibleUntil && correctStreak >= 3
@@ -1236,15 +1313,29 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                         title('$correctStreak연속 정답!', size: 16, color: blue),
                       ],
                     )
+                  : roundResults.isEmpty && !canSkip
+                  ? FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: const Text(
+                        '그림 완성 2초 뒤에 건너뛸 수 있어요',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Color(0xff594b3e),
+                        ),
+                      ),
+                    )
                   : null,
             ),
           ),
-          TextButton(
-            onPressed: canSkip ? skip : null,
-            style: TextButton.styleFrom(
-              foregroundColor: const Color(0xff594b3e),
+          Semantics(
+            hint: canSkip ? '남은 시간에서 3초를 차감합니다' : '그림이 완성되고 2초 뒤에 사용할 수 있습니다',
+            child: TextButton(
+              onPressed: canSkip ? skip : null,
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xff594b3e),
+              ),
+              child: const Text('건너뛰기 · −3초', style: TextStyle(fontSize: 14)),
             ),
-            child: const Text('건너뛰기 · −3초', style: TextStyle(fontSize: 14)),
           ),
         ],
       );
@@ -1461,27 +1552,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             Expanded(child: primary('한 판 더', start, fontSize: 27)),
             const SizedBox(width: 10),
             Expanded(
-              child: OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: ink,
-                  backgroundColor: const Color(0xccfff8ea),
-                  minimumSize: const Size(0, 55),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(19),
-                  ),
-                  side: const BorderSide(color: ink, width: 1.5),
-                  textStyle: const TextStyle(
-                    fontFamily: 'Gaegu',
-                    fontSize: 27,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                onPressed: () => setState(() => phase = Phase.home),
-                child: const FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text('홈으로', maxLines: 1, softWrap: false),
-                ),
-              ),
+              child: secondary('홈으로', () => setState(() => phase = Phase.home)),
             ),
           ],
         ),
@@ -1897,19 +1968,18 @@ class _AdBannerState extends State<AdBanner> {
   @override
   Widget build(BuildContext context) {
     final ad = banner;
-    if (!loaded || ad == null) {
-      return const SizedBox.shrink();
-    }
+    if (!adsSupported) return const SizedBox.shrink();
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (constraints.maxWidth < ad.size.width) {
+        const size = AdSize.banner;
+        if (constraints.maxWidth < size.width) {
           return const SizedBox.shrink();
         }
         return Center(
           child: SizedBox(
-            width: ad.size.width.toDouble(),
-            height: ad.size.height.toDouble(),
-            child: AdWidget(ad: ad),
+            width: size.width.toDouble(),
+            height: size.height.toDouble(),
+            child: loaded && ad != null ? AdWidget(ad: ad) : null,
           ),
         );
       },

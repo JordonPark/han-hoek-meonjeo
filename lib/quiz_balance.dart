@@ -188,6 +188,7 @@ class QuizResult {
     required this.outcome,
     required this.wrongTaps,
     required this.firstTapMs,
+    this.firstTapProgress,
     required this.durationMs,
   });
 
@@ -198,6 +199,7 @@ class QuizResult {
   final QuizOutcome outcome;
   final int wrongTaps;
   final int? firstTapMs;
+  final double? firstTapProgress;
   final int durationMs;
 
   Map<String, Object?> toJson() => {
@@ -208,6 +210,7 @@ class QuizResult {
     'outcome': outcome.name,
     'wrongTaps': wrongTaps,
     'firstTapMs': firstTapMs,
+    'firstTapProgress': firstTapProgress,
     'durationMs': durationMs,
   };
 }
@@ -225,15 +228,24 @@ class QuizBalanceHistory {
           final outcome = row['outcome'];
           final correct = outcome == QuizOutcome.correct.name;
           final firstTap = row['firstTapMs'];
+          final progress = row['firstTapProgress'];
           final id = row['questionId'];
-          _byLevel
-              .putIfAbsent((level, ai), _QuizTotals.new)
-              .add(
-                correct,
-                duration,
-                outcome == QuizOutcome.skipped.name,
-                firstTap is int ? firstTap : null,
-              );
+          final totals = _byLevel.putIfAbsent((level, ai), _QuizTotals.new);
+          totals.add(
+            correct,
+            duration,
+            outcome == QuizOutcome.skipped.name,
+            firstTap is int ? firstTap : null,
+          );
+          if (progress is num) {
+            totals.knownProgress++;
+            if (progress < 1) totals.beforeFinish++;
+          }
+          if (row['assisted'] == true) {
+            _assisted
+                .putIfAbsent(level, _QuizTotals.new)
+                .add(correct, duration, false, null);
+          }
           if (id is String && outcome != QuizOutcome.timeUp.name) {
             _byQuestion
                 .putIfAbsent((id, level, ai), _QuizTotals.new)
@@ -255,6 +267,7 @@ class QuizBalanceHistory {
 
   final _byLevel = <(int, bool), _QuizTotals>{};
   final _byQuestion = <(String, int, bool), _QuizTotals>{};
+  final _assisted = <int, _QuizTotals>{};
 
   bool prefersStored(String id, int level) {
     final ai = _byQuestion[(id, level, true)];
@@ -271,6 +284,35 @@ class QuizBalanceHistory {
       _byLevel.containsKey((level, true)) ||
       _byLevel.containsKey((level, false));
 
+  String? assistedSummary(int level) {
+    final totals = _assisted[level];
+    return totals == null
+        ? null
+        : '난이도 완화 후 정답 ${totals.correct}/${totals.questions}';
+  }
+
+  List<({String id, int level, bool generated, int correct, int total})>
+  reviewCandidates() {
+    final ranked =
+        _byQuestion.entries
+            .where(
+              (entry) =>
+                  entry.value.questions >= 6 && entry.value.correctRate < 0.5,
+            )
+            .toList()
+          ..sort((a, b) => a.value.correctRate.compareTo(b.value.correctRate));
+    return ranked.take(5).map((entry) {
+      final (id, level, generated) = entry.key;
+      return (
+        id: id,
+        level: level,
+        generated: generated,
+        correct: entry.value.correct,
+        total: entry.value.questions,
+      );
+    }).toList();
+  }
+
   String describe(int level, {required bool generated}) {
     final totals = _byLevel[(level, generated)];
     if (totals == null) return '기록 없음';
@@ -281,7 +323,10 @@ class QuizBalanceHistory {
     final firstTap = totals.firstTaps == 0
         ? '—'
         : '${(totals.firstTapMs / totals.firstTaps / 1000).toStringAsFixed(1)}초';
-    return '${totals.questions}문제 · 정답률 $percent% · 정답까지 $correctTime\n첫 선택 $firstTap · 건너뛰기 ${totals.skips}회';
+    final early = totals.knownProgress == 0
+        ? ''
+        : ' · 완성 전 선택 ${totals.beforeFinish}/${totals.knownProgress}';
+    return '${totals.questions}문제 · 정답률 $percent% · 정답까지 $correctTime\n첫 선택 $firstTap · 건너뛰기 ${totals.skips}회$early';
   }
 }
 
@@ -292,6 +337,8 @@ class _QuizTotals {
   int skips = 0;
   int firstTaps = 0;
   int firstTapMs = 0;
+  int knownProgress = 0;
+  int beforeFinish = 0;
 
   double get correctRate => correct / questions;
 
