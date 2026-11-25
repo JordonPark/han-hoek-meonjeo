@@ -67,6 +67,7 @@ flutter:
     - assets/audio/
     - assets/questions.json
     - assets/related_questions.json
+    - assets/outline_questions.json
     - assets/paper-rabbit.webp
     - assets/wrinkled-paper.webp
     - assets/open-rabbit.png

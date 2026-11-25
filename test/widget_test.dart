@@ -67,6 +67,7 @@ void main() {
     addTearDown(() {
       rootBundle.evict('assets/questions.json');
       rootBundle.evict('assets/related_questions.json');
+      rootBundle.evict('assets/outline_questions.json');
     });
     await tester.pumpWidget(const Sketchbook());
     final dynamic game = tester.state(find.byType(GameScreen));
@@ -118,7 +119,7 @@ void main() {
     expect(tester.getCenter(find.byKey(artwork)), resting);
   });
 
-  test('skipping unlocks three seconds after a drawing completes', () {
+  test('skipping unlocks two seconds after a drawing completes', () {
     const start = 48000;
     const level = 3;
     final completed = List.generate(5000, (i) => start + i).firstWhere(
@@ -133,8 +134,8 @@ void main() {
     bool canSkip(int elapsed) =>
         canSkipAt(elapsedMs: elapsed, questionStartedMs: start, level: level);
     expect(canSkip(completed), isFalse);
-    expect(canSkip(completed + 2999), isFalse);
-    expect(canSkip(completed + 3000), isTrue);
+    expect(canSkip(completed + skipWaitMs - 1), isFalse);
+    expect(canSkip(completed + skipWaitMs), isTrue);
   });
   test('strokes accelerate smoothly over the round', () {
     double progress(int elapsed, int start) => strokeProgressAt(
@@ -226,6 +227,19 @@ void main() {
       expect(find.byType(OutlinedButton), findsNWidgets(4));
       expect(tester.widget<TextButton>(skip).onPressed, isNull);
       expect(tester.getBottomLeft(skip).dy, lessThan(844));
+      final dynamic game = tester.state(find.byType(GameScreen));
+      final original = List<String>.of(game.options as List<String>);
+      const longOption = '아주 긴 제시어가 들어간 보기';
+      game.setState(() => game.options = [longOption, ...original.skip(1)]);
+      await tester.pump();
+      final longText = find.text(longOption);
+      expect(tester.widget<Text>(longText).maxLines, 1);
+      expect(
+        tester.getSize(find.widgetWithText(OutlinedButton, longOption)).height,
+        greaterThanOrEqualTo(48),
+      );
+      game.setState(() => game.options = original);
+      await tester.pump();
       final sketchbook = find.byKey(const ValueKey('play-sketchbook'));
       expect(tester.getSize(sketchbook).width, closeTo(238, 0.1));
       expect(
@@ -259,15 +273,19 @@ void main() {
         lessThan(tester.getTopLeft(find.byType(OutlinedButton).first).dy),
       );
       expect(find.text('0점'), findsOneWidget);
-      final dynamic game = tester.state(find.byType(GameScreen));
       final options = game.options as List<String>;
       final answer = (game.prompt as Prompt).label;
       expect(familiarQuestions, contains((game.prompt as Prompt).id));
+      expect(openingQuestions, contains((game.prompt as Prompt).id));
       final wrong = options.firstWhere((option) => option != answer);
       await tester.tap(find.widgetWithText(OutlinedButton, wrong));
       await tester.pump();
       expect(find.text('틀렸어요'), findsOneWidget);
       expect(find.text('✕ $wrong'), findsOneWidget);
+      expect(
+        (game.lockedUntil as int) - (game.elapsed as int),
+        inInclusiveRange(650, 800),
+      );
       expect(
         tester
             .widgetList<OutlinedButton>(find.byType(OutlinedButton))
@@ -294,8 +312,20 @@ void main() {
         QuizOutcome.correct,
       );
       expect((game.roundResults as List<QuizResult>).single.wrongTaps, 1);
+      game.answer((game.prompt as Prompt).label);
+      game.bonusGrantedMs = maxRoundBonusMs;
+      final cappedDeadline = game.deadlineMs;
+      game.answer((game.prompt as Prompt).label);
+      await tester.pump();
+      expect(game.deadlineMs, cappedDeadline);
+      expect(find.text('3연속 정답!'), findsOneWidget);
+      game.deadlineMs = (game.elapsed as int) + 9000;
+      game.tick();
+      expect(game.finalTenCuePlayed, isTrue);
+      final reviewed = game.prompt as Prompt;
+      game.missed.add((reviewed.label, reviewed.drawings.first));
       game.finish();
-      expect(game.lastBalanceSummary, contains('정답 1개 · 오답 1회'));
+      expect(game.lastBalanceSummary, contains('정답 3개 · 오답 1회'));
       tester.view.physicalSize = const Size(390, 844);
       await tester.pump();
       final replay = find.widgetWithText(FilledButton, '한 판 더');
@@ -304,6 +334,15 @@ void main() {
       expect(tester.widget<Text>(find.text('홈으로')).maxLines, 1);
       expect(tester.getSize(replay).height, tester.getSize(home).height);
       expect(tester.getCenter(replay).dy, tester.getCenter(home).dy);
+      final missedCard = find.text(reviewed.label);
+      await tester.ensureVisible(missedCard);
+      await tester.tap(missedCard);
+      await tester.pumpAndSettle();
+      expect(find.text('다시 맞히기'), findsOneWidget);
+      await tester.tap(find.widgetWithText(OutlinedButton, reviewed.label));
+      await tester.pump();
+      expect(find.text('정답이에요!'), findsOneWidget);
+      expect(game.score, 3);
       await tester.pumpWidget(const SizedBox());
     },
   );

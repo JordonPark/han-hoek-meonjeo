@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 
-enum GameSound { countdown, start, correct, wrong, finish }
+enum GameSound { countdown, start, correct, wrong, finish, lastTen }
 
 class GameAudio {
   bool musicEnabled = true;

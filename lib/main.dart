@@ -18,7 +18,9 @@ const ink = Color(0xff31271c);
 const paperTexture = AssetImage('assets/wrinkled-paper.webp');
 const roundStartMs = 60000;
 const correctBonusMs = 1000;
+const maxRoundBonusMs = 15000;
 const skipPenaltyMs = 3000;
+const skipWaitMs = 2000;
 
 double strokeProgressAt({
   required int elapsedMs,
@@ -43,7 +45,7 @@ bool canSkipAt({
   required int level,
 }) =>
     strokeProgressAt(
-      elapsedMs: elapsedMs - 3000,
+      elapsedMs: elapsedMs - skipWaitMs,
       questionStartedMs: questionStartedMs,
       level: level,
     ) ==
@@ -133,7 +135,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   List<Prompt> pack = [];
   Map<String, String> labelsById = {};
   Map<String, List<String>> relatedById = {};
+  Map<String, List<String>> outlinesById = {};
+  Map<String, int> openingDrawingById = {};
   final roundResults = <QuizResult>[];
+  QuizBalanceHistory balanceHistory = QuizBalanceHistory(const []);
   String? lastBalanceSummary;
   int missedStreak = 0;
   bool assistance = false;
@@ -151,6 +156,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int level = 1;
   int questionAt = 0;
   int deadlineMs = roundStartMs;
+  int bonusGrantedMs = 0;
+  int correctStreak = 0;
+  int streakVisibleUntil = 0;
+  bool finalTenCuePlayed = false;
   int timeFeedbackUntil = 0;
   String? timeFeedback;
   int lockedUntil = 0;
@@ -308,6 +317,25 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       final labels = {
         for (final question in loaded) question.id: question.label,
       };
+      final outlines = jsonDecode(
+        await rootBundle.loadString('assets/outline_questions.json'),
+      ) as Map;
+      final visualRanks = <String, List<String>>{};
+      final openingDrawings = <String, int>{};
+      for (final question in loaded) {
+        final row = outlines[question.id] as Map;
+        final similar = (row['similar'] as List).cast<String>();
+        final opening = row['opening'] as int;
+        if (similar.toSet().length != 24 ||
+            similar.contains(question.id) ||
+            !similar.every(labels.containsKey) ||
+            opening < 0 ||
+            opening >= question.drawings.length) {
+          throw const FormatException('Invalid quiz outlines');
+        }
+        visualRanks[question.id] = similar;
+        openingDrawings[question.id] = opening;
+      }
       if (ranked.length != labels.length ||
           labels.keys.any((id) {
             final neighbors = ranked[id];
@@ -323,6 +351,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           pack = loaded;
           labelsById = labels;
           relatedById = ranked;
+          outlinesById = visualRanks;
+          openingDrawingById = openingDrawings;
           loading = false;
         });
       }
@@ -340,6 +370,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     try {
       final preferences = await SharedPreferences.getInstance();
       if (!mounted) return;
+      balanceHistory = QuizBalanceHistory(
+        preferences.getStringList('recent_quiz_balance') ?? [],
+      );
       setState(() {
         best = max(best, preferences.getInt('best_score') ?? 0);
         lastBalanceSummary =
@@ -402,6 +435,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       deck = List<Prompt>.of(pack)..shuffle(random);
       clock.reset();
       deadlineMs = roundStartMs;
+      bonusGrantedMs = 0;
+      correctStreak = 0;
+      streakVisibleUntil = 0;
+      finalTenCuePlayed = false;
       timeFeedbackUntil = 0;
       timeFeedback = null;
       round++;
@@ -411,7 +448,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (!preparingDrawing) nextQuestion();
     });
     if (preparingDrawing) {
-      await prepareDrawing(upcomingPrompt(1))
+      await prepareDrawing(upcomingPrompt(1, opening: true))
           .timeout(const Duration(seconds: 45), onTimeout: () {});
       if (!mounted || phase != Phase.preparing) return;
       setState(() {
@@ -442,6 +479,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (remainingMs == 0) {
       finish();
     } else {
+      if (remainingMs <= 10000 && !finalTenCuePlayed) {
+        finalTenCuePlayed = true;
+        audio.play(GameSound.lastTen);
+      }
       setState(() {
         final advanceAt = advanceAfterWrongAt;
         if (advanceAt != null && elapsed >= advanceAt) {
@@ -459,7 +500,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     audio.setActive(resumed);
   }
 
-  Prompt upcomingPrompt(int nextLevel) {
+  Prompt upcomingPrompt(int nextLevel, {bool opening = false}) {
+    if (opening) {
+      for (final candidate in deck.reversed) {
+        if (openingQuestions.contains(candidate.id)) return candidate;
+      }
+    }
     if (nextLevel <= 2) {
       for (final candidate in deck.reversed) {
         if (familiarQuestions.contains(candidate.id)) return candidate;
@@ -487,7 +533,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     assistance = missedStreak >= 2 && baseLevel > 1;
     if (missedStreak >= 2) missedStreak = 0;
     level = quizLevel(score, assistance: assistance);
-    final selected = upcomingPrompt(level);
+    final selected = upcomingPrompt(level, opening: outcome == null);
     deck.remove(selected);
     prompt = selected;
     questionLogged = false;
@@ -499,14 +545,22 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         : level >= 4
         ? variants.skip(variants.length ~/ 2).toList()
         : variants;
-    final fresh = generated.remove(selected.id);
+    final candidate = generated.remove(selected.id);
+    final fresh = balanceHistory.prefersStored(selected.id, level)
+        ? null
+        : candidate;
     aiDrawing = fresh != null;
-    drawing = fresh ?? pool[random.nextInt(pool.length)];
+    drawing =
+        fresh ??
+        (outcome == null
+            ? selected.drawings[openingDrawingById[selected.id]!]
+            : pool[random.nextInt(pool.length)]);
     prefetchDrawing();
     final distractors = quizDistractors(
       answer: selected.id,
       candidates: labelsById.keys.toSet(),
       ranked: relatedById[selected.id]!,
+      outlineRanked: outlinesById[selected.id]!,
       level: level,
       random: random,
     );
@@ -527,6 +581,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     roundResults.add(
       QuizResult(
         level: level,
+        questionId: prompt!.id,
         generated: aiDrawing,
         assisted: assistance,
         outcome: outcome,
@@ -546,10 +601,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     try {
       final preferences = await SharedPreferences.getInstance();
       final rounds = preferences.getStringList('recent_quiz_balance') ?? [];
-      await preferences.setStringList('recent_quiz_balance', [
-        current,
-        ...rounds.take(19),
-      ]);
+      final recent = [current, ...rounds.take(19)];
+      await preferences.setStringList('recent_quiz_balance', recent);
+      balanceHistory = QuizBalanceHistory(recent);
       await preferences.setString('last_balance_summary', summary);
     } catch (_) {
       // Statistics remain visible for the current session.
@@ -568,15 +622,27 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (option == prompt!.label) {
         audio.play(GameSound.correct);
         score++;
-        deadlineMs += correctBonusMs;
-        timeFeedback = '+1초';
-        timeFeedbackUntil = elapsed + 1150;
+        correctStreak++;
+        if (correctStreak % 3 == 0) {
+          streakVisibleUntil = elapsed + 1400;
+          unawaited(HapticFeedback.lightImpact());
+        }
+        if (bonusGrantedMs < maxRoundBonusMs) {
+          bonusGrantedMs += correctBonusMs;
+          deadlineMs += correctBonusMs;
+          timeFeedback = '+1초';
+          timeFeedbackUntil = elapsed + 1150;
+        } else if (timeFeedback == '+1초') {
+          timeFeedback = null;
+        }
         nextQuestion(QuizOutcome.correct);
       } else {
+        correctStreak = 0;
+        streakVisibleUntil = 0;
         unawaited(HapticFeedback.mediumImpact());
         audio.play(GameSound.wrong);
         disabled.add(option);
-        lockedUntil = elapsed + 1500;
+        lockedUntil = elapsed + (disabled.length == 1 ? 800 : 1500);
         if (disabled.length == 3) {
           advanceAfterWrongAt = elapsed + 350;
         }
@@ -591,6 +657,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       return;
     }
     if (!canSkip) return;
+    correctStreak = 0;
+    streakVisibleUntil = 0;
     firstTapMs ??= elapsed - questionAt;
     deadlineMs -= skipPenaltyMs;
     if (remainingMs == 0) {
@@ -935,6 +1003,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               children: [
                 if (lastBalanceSummary != null)
                   Text('최근 플레이\n$lastBalanceSummary'),
+                if (lastBalanceSummary != null)
+                  TextButton(
+                    onPressed: showBalanceDetails,
+                    child: const Text('최근 20판 난이도 비교'),
+                  ),
                 const Text('그림 데이터: Google Quick, Draw! (CC BY 4.0)'),
                 const SelectableText(
                   'https://github.com/googlecreativelab/quickdraw-dataset',
@@ -950,6 +1023,36 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       ),
     ),
   ], distribution: MainAxisAlignment.spaceEvenly);
+
+  void showBalanceDetails() {
+    final history = balanceHistory;
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('최근 20판 난이도 비교'),
+        scrollable: true,
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          spacing: 12,
+          children: [
+            for (var level = 1; level <= 5; level++)
+              if (history.hasLevel(level))
+                Text(
+                  '$level단계\nAI 그림 · ${history.describe(level, generated: true)}\n\n'
+                  '저장된 그림 · ${history.describe(level, generated: false)}',
+                ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('닫기'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget prepare() => spacedPage([
     appTitle(),
@@ -1022,27 +1125,36 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             flex: 2,
             child: FittedBox(
               fit: BoxFit.scaleDown,
-              child: Semantics(
-                liveRegion: feedback != null,
-                child: feedback != null
-                    ? title(
-                        feedback,
-                        size: 15,
-                        color: feedback == '+1초'
-                            ? const Color(0xff226548)
-                            : const Color(0xffa33830),
-                      )
-                    : Text(
-                        aiRound
-                            ? aiDrawing
-                                  ? 'AI 그림'
-                                  : '저장된 그림'
-                            : '',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: Color(0xff594b3e),
-                        ),
-                      ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    aiRound
+                        ? aiDrawing
+                              ? 'AI 그림'
+                              : '저장된 그림'
+                        : '',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: Color(0xff594b3e),
+                    ),
+                  ),
+                  SizedBox(
+                    height: 21,
+                    child: feedback == null
+                        ? null
+                        : Semantics(
+                            liveRegion: true,
+                            child: title(
+                              feedback,
+                              size: 15,
+                              color: feedback == '+1초'
+                                  ? const Color(0xff226548)
+                                  : const Color(0xffa33830),
+                            ),
+                          ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -1066,6 +1178,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               MediaQuery.disableAnimationsOf(context)
                   ? sketchPage(drawing, progress, true)
                   : ClipRect(
+                      clipper: const _PageClip(),
                       child: AnimatedSwitcher(
                         duration: Duration.zero,
                         reverseDuration: const Duration(milliseconds: 320),
@@ -1110,6 +1223,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               height: 22,
               child: elapsed < lockedUntil
                   ? title('틀렸어요', size: 18, color: const Color(0xffa33830))
+                  : elapsed < streakVisibleUntil && correctStreak >= 3
+                  ? Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Image.asset(
+                          'assets/paper-rabbit.webp',
+                          width: 22,
+                          excludeFromSemantics: true,
+                        ),
+                        const SizedBox(width: 5),
+                        title('$correctStreak연속 정답!', size: 16, color: blue),
+                      ],
+                    )
                   : null,
             ),
           ),
@@ -1141,7 +1267,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         ],
         horizontalGutter: gutter,
         verticalGutter: 12,
-        distribution: MainAxisAlignment.start,
+        distribution: MainAxisAlignment.center,
       );
     },
   );
@@ -1154,15 +1280,27 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         minimumSize: const Size(0, 58),
         textStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
         foregroundColor: ink,
+        backgroundColor: const Color(0xeafffbef),
+        overlayColor: blue.withValues(alpha: 0.14),
         disabledForegroundColor: wrong
             ? const Color(0xffa33830)
             : const Color(0xff62564c),
-        disabledBackgroundColor: wrong ? const Color(0xffffe1dc) : null,
+        disabledBackgroundColor: wrong
+            ? const Color(0xffffe1dc)
+            : const Color(0xbffffbef),
         side: BorderSide(color: wrong ? const Color(0xffa33830) : ink),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
       ),
-      child: Text(wrong ? '✕ $option' : option, textAlign: TextAlign.center),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(
+          wrong ? '✕ $option' : option,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          softWrap: false,
+        ),
+      ),
     );
     if (!wrong || MediaQuery.disableAnimationsOf(context)) return button;
     return TweenAnimationBuilder<double>(
@@ -1173,6 +1311,85 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       builder: (context, progress, child) => Transform.translate(
         offset: Offset(sin(progress * 6 * pi) * (1 - progress) * 8, 0),
         child: child,
+      ),
+    );
+  }
+
+  void reviewQuestion(String answer, List<List<Offset>> strokes) {
+    final question = pack.firstWhere((question) => question.label == answer);
+    final choices = quizDistractors(
+      answer: question.id,
+      candidates: labelsById.keys.toSet(),
+      ranked: relatedById[question.id]!,
+      level: 2,
+      random: random,
+    );
+    final reviewOptions = [
+      answer,
+      for (final id in [...choices.similar, ...choices.distinct])
+        labelsById[id]!,
+    ]..shuffle(random);
+    final attempts = <String>{};
+    var solved = false;
+    final reducedMotion = MediaQuery.disableAnimationsOf(context);
+    final replay = AspectRatio(
+      aspectRatio: 1,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: reducedMotion ? Duration.zero : const Duration(seconds: 4),
+        builder: (context, progress, _) =>
+            sketch(strokes, progress, !reducedMotion),
+      ),
+    );
+    showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, update) => AlertDialog(
+          title: const Text('다시 맞히기'),
+          scrollable: true,
+          content: SizedBox(
+            width: 280,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              spacing: 6,
+              children: [
+                replay,
+                for (final option in reviewOptions)
+                  OutlinedButton(
+                    onPressed: solved || attempts.contains(option)
+                        ? null
+                        : () => update(() {
+                            if (option == answer) {
+                              solved = true;
+                              audio.play(GameSound.correct);
+                            } else {
+                              attempts.add(option);
+                              audio.play(GameSound.wrong);
+                            }
+                          }),
+                    child: Text(
+                      attempts.contains(option) ? '✕ $option' : option,
+                    ),
+                  ),
+                if (solved || attempts.isNotEmpty)
+                  Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      solved ? '정답이에요!' : '다른 보기를 골라 보세요',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('닫기'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1203,6 +1420,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         child: Column(
           children: [
             title('놓친 그림', size: 20),
+            const Text('그림을 눌러 다시 맞혀 보세요', style: TextStyle(fontSize: 13)),
             const SizedBox(height: 8),
             Center(
               child: SingleChildScrollView(
@@ -1214,15 +1432,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     for (final (label, strokes) in missed)
                       SizedBox(
                         width: missed.length == 1 ? 216 : 152,
-                        child: Column(
-                          children: [
-                            AspectRatio(
-                              aspectRatio: 1,
-                              child: sketch(strokes, 1, false),
-                            ),
-                            const SizedBox(height: 6),
-                            title(label, size: 15),
-                          ],
+                        child: InkWell(
+                          onTap: () => reviewQuestion(label, strokes),
+                          borderRadius: BorderRadius.circular(20),
+                          child: Column(
+                            children: [
+                              AspectRatio(
+                                aspectRatio: 1,
+                                child: sketch(strokes, 1, false),
+                              ),
+                              const SizedBox(height: 6),
+                              title(label, size: 15),
+                            ],
+                          ),
                         ),
                       ),
                   ],
@@ -1367,6 +1589,16 @@ class ScoreBrush extends CustomPainter {
 
   @override
   bool shouldRepaint(ScoreBrush oldDelegate) => false;
+}
+
+class _PageClip extends CustomClipper<Rect> {
+  const _PageClip();
+
+  @override
+  Rect getClip(Size size) => Rect.fromLTWH(0, 0, size.width, size.height + 6);
+
+  @override
+  bool shouldReclip(_PageClip oldClipper) => false;
 }
 
 class SketchbookBinding extends CustomPainter {
