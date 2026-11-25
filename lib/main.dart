@@ -10,20 +10,26 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'game_audio.dart';
 import 'quiz_balance.dart';
+import 'round_rules.dart';
 import 'sketchflow.dart';
+
+export 'round_rules.dart'
+    show
+        canSkipAt,
+        correctBonusMs,
+        firstWrongLockMs,
+        lastWrongTransitionMs,
+        maxRoundBonusMs,
+        repeatWrongLockMs,
+        roundStartMs,
+        skipPenaltyMs,
+        skipWaitMs,
+        strokeProgressAt;
 
 const blue = Color(0xff2544c4);
 const paper = Color(0xfffff6e3);
 const ink = Color(0xff31271c);
 const paperTexture = AssetImage('assets/wrinkled-paper.webp');
-const roundStartMs = 60000;
-const correctBonusMs = 1000;
-const maxRoundBonusMs = 15000;
-const skipPenaltyMs = 3000;
-const skipWaitMs = 2000;
-const firstWrongLockMs = 800;
-const repeatWrongLockMs = 1500;
-const lastWrongTransitionMs = 350;
 const gameStartCueDuration = Duration(milliseconds: 450);
 const answerLabelSize = 25.0;
 const answerLabelStyle = TextStyle(
@@ -38,40 +44,26 @@ const quizPlaytestLevel = int.fromEnvironment(
   'QUIZ_PLAYTEST_LEVEL',
   defaultValue: 3,
 );
+const _requestedRulePreset = String.fromEnvironment(
+  'QUIZ_PLAYTEST_RULES',
+  defaultValue: 'baseline',
+);
+const _requestedStrategy = String.fromEnvironment('QUIZ_PLAYTEST_STRATEGY');
+final activeRulePreset = quizPlaytestSeed == null
+    ? 'early-retry'
+    : roundRulePresets.containsKey(_requestedRulePreset)
+    ? _requestedRulePreset
+    : 'baseline';
+final activeRoundRules = roundRulePresets[activeRulePreset]!;
 String get balanceHistoryKey =>
     quizPlaytestSeed == null ? 'recent_quiz_balance' : 'quiz_playtest_history';
 String get balanceSummaryKey =>
     quizPlaytestSeed == null ? 'last_balance_summary' : 'quiz_playtest_summary';
 const quizFirstPlayStartedKey = 'quiz_first_play_started';
 
-double strokeProgressAt({
-  required int elapsedMs,
-  required int questionStartedMs,
-  required int level,
-}) {
-  final end = max(0, elapsedMs);
-  final start = questionStartedMs.clamp(0, end);
-  // Speed reaches 2× at 60 seconds and stays there during bonus time.
-  double distanceAt(int elapsed) {
-    final ramp = min(elapsed, roundStartMs);
-    return ramp * (1 + ramp / (2 * roundStartMs)) + 2 * (elapsed - ramp);
-  }
-
-  final drawingTime = distanceAt(end) - distanceAt(start);
-  return (drawingTime / (1700 + level * 1050)).clamp(0.0, 1.0);
-}
-
-bool canSkipAt({
-  required int elapsedMs,
-  required int questionStartedMs,
-  required int level,
-}) =>
-    strokeProgressAt(
-      elapsedMs: elapsedMs - skipWaitMs,
-      questionStartedMs: questionStartedMs,
-      level: level,
-    ) ==
-    1;
+String secondsLabel(int milliseconds) => milliseconds % 1000 == 0
+    ? '${milliseconds ~/ 1000}초'
+    : '${(milliseconds / 1000).toStringAsFixed(1)}초';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -191,12 +183,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int questionAt = 0;
   int deadlineMs = roundStartMs;
   int bonusGrantedMs = 0;
+  int? bonusCapAtMs;
+  int? bonusCapScore;
+  bool roundEndedBySkip = false;
   int correctStreak = 0;
   int streakVisibleUntil = 0;
   bool finalTenCuePlayed = false;
   int timeFeedbackUntil = 0;
   String? timeFeedback;
   int lockedUntil = 0;
+  int answerLockDurationMs = firstWrongLockMs;
   int? advanceAfterWrongAt;
   int countdown = 3;
   bool loading = true;
@@ -526,6 +522,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       clock.reset();
       deadlineMs = roundStartMs;
       bonusGrantedMs = 0;
+      bonusCapAtMs = null;
+      bonusCapScore = null;
+      roundEndedBySkip = false;
       correctStreak = 0;
       streakVisibleUntil = 0;
       finalTenCuePlayed = false;
@@ -742,7 +741,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final snapshot = <String, Object>{
       'durationMs': elapsed,
       'score': score,
+      'roundRules': activeRulePreset,
+      'bonusGrantedMs': bonusGrantedMs,
+      'bonusCapAtMs': ?bonusCapAtMs,
+      'bonusCapScore': ?bonusCapScore,
+      'endedBySkip': roundEndedBySkip,
       'playtestSeed': ?quizPlaytestSeed,
+      if (quizPlaytestSeed != null) ...{
+        'playtestLevel': quizPlaytestLevel.clamp(1, 5),
+        if (const {'guess', 'wait', 'skip'}.contains(_requestedStrategy))
+          'playtestStrategy': _requestedStrategy,
+      },
       'questions': roundResults.map((result) => result.toJson()).toList(),
     };
     try {
@@ -787,12 +796,21 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           streakVisibleUntil = elapsed + 1400;
           unawaited(HapticFeedback.lightImpact());
         }
-        if (bonusGrantedMs < maxRoundBonusMs) {
-          bonusGrantedMs += correctBonusMs;
-          deadlineMs += correctBonusMs;
-          timeFeedback = '+1초';
+        final now = elapsed;
+        final bonus = activeRoundRules.bonusGrantMs(
+          elapsedMs: now,
+          alreadyGrantedMs: bonusGrantedMs,
+        );
+        if (bonus > 0) {
+          bonusGrantedMs += bonus;
+          deadlineMs += bonus;
+          if (bonusGrantedMs == maxRoundBonusMs) {
+            bonusCapAtMs = now;
+            bonusCapScore = score;
+          }
+          timeFeedback = '+${secondsLabel(bonus)}';
           timeFeedbackUntil = elapsed + 1150;
-        } else if (timeFeedback == '+1초') {
+        } else if (timeFeedback?.startsWith('+') ?? false) {
           timeFeedback = null;
         }
         nextQuestion(QuizOutcome.correct);
@@ -803,16 +821,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         audio.play(GameSound.wrong);
         disabled.add(option);
         final now = elapsed;
-        if (strokeProgressAt(
-              elapsedMs: now,
-              questionStartedMs: questionAt,
-              level: level,
-            ) >=
-            1) {
+        final drawingProgress = strokeProgressAt(
+          elapsedMs: now,
+          questionStartedMs: questionAt,
+          level: level,
+        );
+        if (drawingProgress >= 1) {
           finishedWrongChoices.add(option);
         }
-        lockedUntil =
-            now + (disabled.length == 1 ? firstWrongLockMs : repeatWrongLockMs);
+        answerLockDurationMs = activeRoundRules.retryDelayMs(
+          disabled.length,
+          drawingProgress,
+        );
+        lockedUntil = now + answerLockDurationMs;
         if (disabled.length == 3) {
           advanceAfterWrongAt = now + lastWrongTransitionMs;
         }
@@ -829,14 +850,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (!canSkip) return;
     correctStreak = 0;
     streakVisibleUntil = 0;
-    deadlineMs -= skipPenaltyMs;
+    deadlineMs -= activeRoundRules.skipCostMs;
     if (remainingMs == 0) {
+      roundEndedBySkip = true;
       recordQuestion(QuizOutcome.skipped);
       finish();
       return;
     }
     setState(() {
-      timeFeedback = '−3초';
+      timeFeedback = '−${secondsLabel(activeRoundRules.skipCostMs)}';
       timeFeedbackUntil = elapsed + 1150;
       missed.add((prompt!.label, drawing));
       nextQuestion(QuizOutcome.skipped);
@@ -1173,7 +1195,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         const SizedBox(height: 10),
         title('60초 동안 그림을 맞혀요', size: 21),
         const SizedBox(height: 4),
-        const Text('정답 +1초 · 건너뛰기 −3초', textAlign: TextAlign.center),
+        Text(
+          '정답 +1초 · 건너뛰기 −${secondsLabel(activeRoundRules.skipCostMs)}',
+          textAlign: TextAlign.center,
+        ),
+        if (activeRoundRules.reducedBonusFromMs case final elapsed?)
+          Text(
+            '${secondsLabel(elapsed)}부터 정답 +0.5초',
+            textAlign: TextAlign.center,
+          ),
         const Text('그림이 완성되기 전에도 답을 고를 수 있어요.', textAlign: TextAlign.center),
       ],
     ),
@@ -1227,6 +1257,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   onPressed: showLevelProgressReview,
                   child: const Text('레벨 진행 검수'),
                 ),
+                TextButton(
+                  onPressed: () => showQuizReview(
+                    '밸런스 검수',
+                    balanceHistory.roundRulesReview(labelsById),
+                  ),
+                  child: const Text('밸런스 검수'),
+                ),
                 const Text('그림 데이터: Google Quick, Draw! (CC BY 4.0)'),
                 const SelectableText(
                   'https://github.com/googlecreativelab/quickdraw-dataset',
@@ -1265,12 +1302,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     ],
   );
 
-  void showLevelProgressReview() {
-    final sections = balanceHistory.levelProgressReview(labelsById);
+  void showLevelProgressReview() => showQuizReview(
+    '레벨 진행 검수',
+    balanceHistory.levelProgressReview(labelsById),
+  );
+
+  void showQuizReview(
+    String heading,
+    List<({String title, String value})> sections,
+  ) {
     showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('레벨 진행 검수'),
+        title: Text(heading),
         scrollable: true,
         content: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1296,16 +1340,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           TextButton(
             onPressed: () async {
               final report = [
-                '레벨 진행 검수 · 이 기기의 최근 20판',
+                '$heading · 이 기기의 최근 20판',
                 for (final section in sections)
                   '${section.title}\n${section.value}',
               ].join('\n\n');
               await Clipboard.setData(ClipboardData(text: report));
               if (!dialogContext.mounted || !mounted) return;
               Navigator.pop(dialogContext);
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text('레벨 진행 기록을 복사했어요.')));
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(const SnackBar(content: Text('검수 기록을 복사했어요.')));
             },
             child: const Text('기록 복사'),
           ),
@@ -1513,7 +1556,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                             child: title(
                               feedback,
                               size: 15,
-                              color: feedback == '+1초'
+                              color: feedback.startsWith('+')
                                   ? const Color(0xff226548)
                                   : const Color(0xffa33830),
                             ),
@@ -1646,9 +1689,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       final end = nextDrawingAt ?? lockedUntil;
       final duration = nextDrawingAt != null
           ? lastWrongTransitionMs
-          : disabled.length == 1
-          ? firstWrongLockMs
-          : repeatWrongLockMs;
+          : answerLockDurationMs;
       final remaining = ((end - now) / duration).clamp(0.0, 1.0);
       message = Row(
         mainAxisSize: MainAxisSize.min,
@@ -1714,7 +1755,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final emphasized = enabled && !deemphasize;
     final foreground = emphasized ? blue : const Color(0xff695947);
     return Semantics(
-      hint: enabled ? '남은 시간에서 3초를 차감합니다' : '그림이 완성되고 2초 뒤에 사용할 수 있습니다',
+      hint: enabled
+          ? '남은 시간에서 ${secondsLabel(activeRoundRules.skipCostMs)}를 차감합니다'
+          : '그림이 완성되고 2초 뒤에 사용할 수 있습니다',
       child: TextButton(
         key: const ValueKey('skip-question'),
         onPressed: enabled ? skip : null,
@@ -1762,7 +1805,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     vertical: 2,
                   ),
                   child: Text(
-                    '−3초',
+                    '−${secondsLabel(activeRoundRules.skipCostMs)}',
                     style: TextStyle(
                       fontSize: 12,
                       color: enabled ? const Color(0xff894539) : foreground,

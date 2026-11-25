@@ -8,8 +8,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:rabbit_sketchbook/main.dart';
 import 'package:rabbit_sketchbook/quiz_balance.dart';
+import 'package:rabbit_sketchbook/round_rules.dart' show roundRulePresets;
 import 'package:rabbit_sketchbook/sketchflow.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../tools/check_round_balance.dart' show Strategy, playTrial;
 
 class _LoadedSketchFlow implements SketchFlow {
   @override
@@ -20,6 +23,116 @@ class _LoadedSketchFlow implements SketchFlow {
 }
 
 void main() {
+  test('only two early wrong taps receive the longer retry delay', () {
+    final rules = roundRulePresets['early-retry']!;
+    expect(rules.retryDelayMs(1, .1), 800);
+    expect(rules.retryDelayMs(2, .499), 2600);
+    expect(rules.retryDelayMs(2, .5), 1500);
+    expect(rules.skipCostMs, 3000);
+    expect(rules.bonusGrantMs(elapsedMs: 39000, alreadyGrantedMs: 14500), 500);
+    expect(rules.bonusGrantMs(elapsedMs: 39000, alreadyGrantedMs: 15000), 0);
+    expect(
+      roundRulePresets['late-bonus']!.bonusGrantMs(
+        elapsedMs: 30000,
+        alreadyGrantedMs: 0,
+      ),
+      500,
+    );
+  });
+
+  test(
+    'the level-five schedule rewards reading instead of repeated blind taps',
+    () {
+      final baseline = roundRulePresets['baseline']!;
+      final revised = roundRulePresets['early-retry']!;
+      var oldGuess = 0;
+      var newGuess = 0;
+      var waiting = 0;
+      for (var seed = 0; seed < 200; seed++) {
+        oldGuess += playTrial(seed, 5, Strategy.guess, baseline).score;
+        newGuess += playTrial(seed, 5, Strategy.guess, revised).score;
+        final oldWait = playTrial(seed, 5, Strategy.wait, baseline);
+        final newWait = playTrial(seed, 5, Strategy.wait, revised);
+        expect(newWait, oldWait);
+        waiting += newWait.score;
+      }
+      expect(oldGuess, greaterThan(waiting));
+      expect(newGuess, lessThan(waiting));
+    },
+  );
+
+  test(
+    'balance review reports rule outcomes and compares matched drawing sources',
+    () {
+      QuizResult question(
+        bool generated,
+        QuizOutcome outcome, {
+        bool assisted = false,
+        int level = 3,
+      }) => QuizResult(
+        level: level,
+        questionId: 'clock',
+        generated: generated,
+        assisted: assisted,
+        outcome: outcome,
+        wrongTaps: 1,
+        firstTapMs: 320,
+        firstTapProgress: .12,
+        durationMs: generated ? 3000 : 2000,
+      );
+      final history = QuizBalanceHistory([
+        jsonEncode({
+          'roundRules': 'early-retry',
+          'durationMs': 69000,
+          'score': 18,
+          'bonusGrantedMs': 15000,
+          'bonusCapAtMs': 48000,
+          'bonusCapScore': 15,
+          'endedBySkip': true,
+          'questions': [
+            question(true, QuizOutcome.wrong).toJson(),
+            question(true, QuizOutcome.wrong).toJson(),
+            for (var i = 0; i < 6; i++)
+              question(
+                true,
+                i < 3 ? QuizOutcome.correct : QuizOutcome.skipped,
+              ).toJson(),
+            for (var i = 0; i < 6; i++)
+              question(false, QuizOutcome.correct).toJson(),
+            question(false, QuizOutcome.correct, assisted: true).toJson(),
+            question(false, QuizOutcome.correct, level: 4).toJson(),
+          ],
+        }),
+        jsonEncode({
+          'roundRules': 'skip-2',
+          'durationMs': 61000,
+          'score': 12,
+          'bonusGrantedMs': 12000,
+          'endedBySkip': false,
+          'playtestSeed': 42,
+          'playtestLevel': 5,
+          'playtestStrategy': 'skip',
+          'questions': [
+            for (var i = 0; i < 8; i++)
+              question(false, QuizOutcome.correct).toJson(),
+          ],
+        }),
+      ]);
+      final report = {
+        for (final section in history.roundRulesReview({'clock': '시계'}))
+          section.title: section.value,
+      };
+      expect(report['일반 플레이 · 그림 초반 오답 보정'], contains('건너뛰기로 종료 1/1판'));
+      expect(report['일반 플레이 · 그림 초반 오답 보정'], contains('상한 이후 평균 3.0개 정답'));
+      expect(report['모르면 건너뛰기 · 건너뛰기 −2초 · 5단계'], contains('시드 42 · 12점'));
+      expect(
+        report['시계 · 3단계'],
+        'AI 그림 · 정답 3/6 · 건너뛰기 3회 · 정답까지 3.0초\n저장 그림 · 정답 6/6 · 건너뛰기 0회 · 정답까지 2.0초',
+      );
+      expect(report.containsKey('시계 · 4단계'), isFalse);
+    },
+  );
+
   test('levels increase every two points and assistance lowers one level', () {
     expect(List.generate(10, quizLevel), [1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
     expect(quizLevel(8, assistance: true), 4);
@@ -772,6 +885,8 @@ void main() {
         preferences.getStringList(balanceHistoryKey)!.single,
       ) as Map;
       expect(logged['firstPlay'], isTrue);
+      expect(logged['roundRules'], 'early-retry');
+      expect(logged['bonusGrantedMs'], 15000);
       expect(
         (logged['questions'] as List).first['storedDrawingIndex'],
         isA<int>(),
@@ -801,6 +916,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(copiedReport, contains('새 설치 첫 플레이 1/1판'));
       expect(copiedReport, contains('회복 문제와 복귀 직후'));
+      await tester.tap(find.widgetWithText(TextButton, '밸런스 검수'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, '기록 복사'));
+      await tester.pumpAndSettle();
+      expect(copiedReport, contains('일반 플레이 · 그림 초반 오답 보정'));
+      expect(copiedReport, contains('보너스 상한 도달'));
       await tester.pumpWidget(const SizedBox());
     },
   );

@@ -378,6 +378,10 @@ class QuizBalanceHistory {
         var score = 0;
         var previousScore = 0;
         var roundElapsed = 0;
+        var roundWrongs = 0;
+        var roundSkips = 0;
+        var roundFirstChoices = 0;
+        var roundEarlyChoices = 0;
         for (final (index, row) in questions.whereType<Map>().indexed) {
           final level = row['level'];
           final ai = row['generated'];
@@ -386,11 +390,18 @@ class QuizBalanceHistory {
           final outcome = row['outcome'];
           final correct = outcome == QuizOutcome.correct.name;
           final skipped = outcome == QuizOutcome.skipped.name;
+          final wrongTaps = row['wrongTaps'];
+          if (wrongTaps is int) roundWrongs += wrongTaps;
+          if (skipped) roundSkips++;
           final assisted = row['assisted'] == true;
           // Older versions counted a skip without an answer as a first tap.
           final skipWasFirst = skipped && row['wrongTaps'] == 0;
           final firstTap = skipWasFirst ? null : row['firstTapMs'];
           final progress = skipWasFirst ? null : row['firstTapProgress'];
+          if (progress is num) {
+            roundFirstChoices++;
+            if (progress < .5) roundEarlyChoices++;
+          }
           final firstChoiceMs = firstTap is int ? firstTap : null;
           final id = row['questionId'];
           final storedIndex = row['storedDrawingIndex'];
@@ -468,6 +479,11 @@ class QuizBalanceHistory {
             _byQuestion
                 .putIfAbsent((id, level, ai), _QuizTotals.new)
                 .add(correct, duration, skipped, firstChoiceMs);
+            if (!assisted && index >= 2 && entry['playtestSeed'] == null) {
+              _sourceComparison
+                  .putIfAbsent((id, level, ai), _QuizTotals.new)
+                  .add(correct, duration, skipped, firstChoiceMs);
+            }
           }
           final finishedWrong = row['finishedWrongChoices'];
           if (id is String && finishedWrong is List) {
@@ -479,6 +495,36 @@ class QuizBalanceHistory {
               );
             }
           }
+        }
+        final rules = entry['roundRules'];
+        final duration = entry['durationMs'];
+        final bonus = entry['bonusGrantedMs'];
+        final finalScore = entry['score'];
+        if (rules is String &&
+            duration is int &&
+            bonus is int &&
+            finalScore is int) {
+          final seed = entry['playtestSeed'];
+          final level = entry['playtestLevel'];
+          final strategy = entry['playtestStrategy'];
+          final capAt = entry['bonusCapAtMs'];
+          final capScore = entry['bonusCapScore'];
+          _ruleRounds.add((
+            rules: rules,
+            seed: seed is int ? seed : null,
+            level: level is int ? level : null,
+            strategy: strategy is String ? strategy : null,
+            score: finalScore,
+            durationMs: duration,
+            bonusMs: bonus,
+            wrongs: roundWrongs,
+            skips: roundSkips,
+            endedBySkip: entry['endedBySkip'] == true,
+            capAtMs: capAt is int ? capAt : null,
+            afterCap: capScore is int ? max(0, finalScore - capScore) : null,
+            firstChoices: roundFirstChoices,
+            earlyChoices: roundEarlyChoices,
+          ));
         }
         if (sawOpeningQuestion && entry['firstPlay'] == true) {
           _verifiedFirstPlays++;
@@ -497,6 +543,8 @@ class QuizBalanceHistory {
 
   final _byLevel = <(int, bool), _QuizTotals>{};
   final _byQuestion = <(String, int, bool), _QuizTotals>{};
+  final _sourceComparison = <(String, int, bool), _QuizTotals>{};
+  final _ruleRounds = <_RuleRound>[];
   final _assisted = <int, _QuizTotals>{};
   final _promoted = <int, _QuizTotals>{};
   final _opening = _QuizTotals();
@@ -562,6 +610,75 @@ class QuizBalanceHistory {
 
   String? get levelFiveEntrySummary =>
       _levelFiveEntry.questions == 0 ? null : _levelFiveEntry.summary;
+
+  List<({String title, String value})> roundRulesReview(
+    Map<String, String> labels,
+  ) {
+    final groups = <(String, String?, int?), List<_RuleRound>>{};
+    for (final round in _ruleRounds) {
+      groups
+          .putIfAbsent((round.rules, round.strategy, round.level), () => [])
+          .add(round);
+    }
+    const strategyLabels = {
+      'guess': '빠른 추측',
+      'wait': '획을 기다리기',
+      'skip': '모르면 건너뛰기',
+    };
+    const ruleLabels = {
+      'baseline': '기존 규칙',
+      'retry-2200': '두 번째 오답 2.2초',
+      'early-retry': '그림 초반 오답 보정',
+      'skip-2': '건너뛰기 −2초',
+      'late-bonus': '30초 이후 정답 +0.5초',
+    };
+    final comparisons =
+        <({String id, int level, _QuizTotals ai, _QuizTotals stored})>[];
+    for (final entry in _sourceComparison.entries) {
+      final (id, level, generated) = entry.key;
+      if (!generated || entry.value.questions < 6) continue;
+      final stored = _sourceComparison[(id, level, false)];
+      if (stored != null && stored.questions >= 6) {
+        comparisons.add((
+          id: id,
+          level: level,
+          ai: entry.value,
+          stored: stored,
+        ));
+      }
+    }
+    double gap(_QuizTotals ai, _QuizTotals stored) => max(
+      (ai.correctRate - stored.correctRate).abs(),
+      (ai.skipRate - stored.skipRate).abs(),
+    );
+    comparisons.sort(
+      (a, b) => gap(b.ai, b.stored).compareTo(gap(a.ai, a.stored)),
+    );
+    String source(_QuizTotals totals) =>
+        '정답 ${totals.correct}/${totals.questions} · 건너뛰기 ${totals.skips}회 · 정답까지 ${totals.averageCorrectTime}';
+    return [
+      if (groups.isEmpty) (title: '전략과 시간 규칙', value: '검수 빌드에서 완료한 판이 없어요.'),
+      for (final entry in groups.entries)
+        (
+          title:
+              '${strategyLabels[entry.key.$2] ?? (entry.key.$3 == null ? '일반 플레이' : '전략 미지정')} · '
+              '${ruleLabels[entry.key.$1] ?? entry.key.$1}${entry.key.$3 == null ? '' : ' · ${entry.key.$3}단계'}',
+          value: _summarizeRuleRounds(entry.value),
+        ),
+      if (comparisons.isEmpty)
+        (
+          title: '같은 제시어와 단계의 그림 출처 비교',
+          value: 'AI와 저장 그림의 기록이 각각 6건 이상인 조합이 없어요.',
+        ),
+      for (final comparison in comparisons.take(4))
+        (
+          title:
+              '${labels[comparison.id] ?? comparison.id} · ${comparison.level}단계',
+          value:
+              'AI 그림 · ${source(comparison.ai)}\n저장 그림 · ${source(comparison.stored)}',
+        ),
+    ];
+  }
 
   List<({String title, String value})> levelProgressReview(
     Map<String, String> labels,
@@ -680,15 +797,60 @@ class QuizBalanceHistory {
     final totals = _byLevel[(level, generated)];
     if (totals == null) return '기록 없음';
     final percent = (100 * totals.correctRate).round();
-    final correctTime = totals.correct == 0
-        ? '—'
-        : '${(totals.correctMs / totals.correct / 1000).toStringAsFixed(1)}초';
+    final correctTime = totals.averageCorrectTime;
     final early = totals.knownProgress == 0
         ? ''
         : ' · 완성 전 선택 ${totals.beforeFinish}/${totals.knownProgress}';
     return '${totals.questions}문제 · 정답률 $percent% · 정답까지 $correctTime\n'
         '첫 선택 ${totals.firstChoiceTime} · 건너뛰기 ${totals.skipPercent}%$early';
   }
+}
+
+typedef _RuleRound = ({
+  String rules,
+  int? seed,
+  int? level,
+  String? strategy,
+  int score,
+  int durationMs,
+  int bonusMs,
+  int wrongs,
+  int skips,
+  bool endedBySkip,
+  int? capAtMs,
+  int? afterCap,
+  int firstChoices,
+  int earlyChoices,
+});
+
+String _summarizeRuleRounds(List<_RuleRound> rounds) {
+  String average(num Function(_RuleRound) value) =>
+      (rounds.fold<num>(0, (sum, round) => sum + value(round)) / rounds.length)
+          .toStringAsFixed(1);
+  final skipped = rounds.where((round) => round.skips > 0).length;
+  final ended = rounds.where((round) => round.endedBySkip).length;
+  final capped = rounds.where((round) => round.capAtMs != null).toList();
+  final firstChoices = rounds.fold(0, (sum, round) => sum + round.firstChoices);
+  final earlyChoices = rounds.fold(0, (sum, round) => sum + round.earlyChoices);
+  final cap = capped.isEmpty
+      ? ''
+      : ' · 평균 ${(capped.fold<int>(0, (sum, round) => sum + round.capAtMs!) / capped.length / 1000).toStringAsFixed(1)}초';
+  final afterCap = capped
+      .map((round) => round.afterCap)
+      .whereType<int>()
+      .toList();
+  return [
+    '${rounds.length}판 · 평균 ${average((round) => round.score)}점 · ${average((round) => round.durationMs / 1000)}초',
+    '평균 오답 ${average((round) => round.wrongs)}회 · 건너뛰기 ${average((round) => round.skips)}회',
+    if (firstChoices > 0) '그림 절반 전 첫 선택 $earlyChoices/$firstChoices회',
+    '건너뛰기로 종료 $ended/$skipped판 · 평균 보너스 +${average((round) => round.bonusMs / 1000)}초',
+    '보너스 상한 도달 ${capped.length}/${rounds.length}판$cap',
+    if (afterCap.isNotEmpty)
+      '상한 이후 평균 ${(afterCap.reduce((a, b) => a + b) / afterCap.length).toStringAsFixed(1)}개 정답',
+    for (final round in rounds)
+      if (round.seed case final seed?)
+        '시드 $seed · ${round.score}점 · ${(round.durationMs / 1000).toStringAsFixed(1)}초 · 오답 ${round.wrongs}회 · 건너뛰기 ${round.skips}회',
+  ].join('\n');
 }
 
 class _ReviewOutcomes {
@@ -748,6 +910,9 @@ class _QuizTotals {
   int beforeFinish = 0;
 
   double get correctRate => correct / questions;
+  String get averageCorrectTime => correct == 0
+      ? '—'
+      : '${(correctMs / correct / 1000).toStringAsFixed(1)}초';
   double get skipRate => skips / questions;
   int get skipPercent => (100 * skipRate).round();
   String get firstChoiceTime => firstTaps == 0
