@@ -43,7 +43,7 @@ jobs:
           if [[ "$DISTRIBUTION" == app-store ]]; then
             test_ads=false
           fi
-          flutter build ipa --release --no-codesign --no-pub --build-name=1.0.0 --build-number="$GITHUB_RUN_NUMBER" --dart-define="ADMOB_TEST_ADS=$test_ads"
+          flutter build ipa --release --no-codesign --no-pub --build-number="$GITHUB_RUN_NUMBER" --dart-define="ADMOB_TEST_ADS=$test_ads"
           test -f build/ios/archive/Runner.xcarchive/Info.plist
 
       - name: Sign and upload to App Store Connect
